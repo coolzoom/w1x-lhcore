@@ -377,7 +377,7 @@ enum SpellAttributesEx4
 {
     SPELL_ATTR_EX4_IGNORE_RESISTANCES         = 0x00000001,            // 0 From TC 3.3.5, but not present in 1.12 native DBCs. Add it with spell_mod to prevent a spell from being resisted.
     SPELL_ATTR_EX4_UNK1                       = 0x00000002,            // 1 proc on finishing move?
-    SPELL_ATTR_EX4_UNK2                       = 0x00000004,            // 2
+    SPELL_ATTR_EX4_REAL_TIME_DURATION         = 0x00000004,            // 2 aura continues to expire while player is offline
     SPELL_ATTR_EX4_UNK3                       = 0x00000008,            // 3
     SPELL_ATTR_EX4_UNK4                       = 0x00000010,            // 4 This will no longer cause guards to attack on use??
     SPELL_ATTR_EX4_UNK5                       = 0x00000020,            // 5
@@ -966,6 +966,9 @@ enum Mechanics
 
 #define IMMUNE_TO_ROOT_AND_STUN_MASK ( \
     (1<<(MECHANIC_ROOT-1))|(1<<(MECHANIC_STUN-1)))
+
+#define CONFUSED_MECHANIC_MASK ( \
+    (1<<(MECHANIC_DISORIENTED-1))|(1<<(MECHANIC_POLYMORPH-1)))
 
 // Daze and all croud control spells except polymorph are not removed
 #define MECHANIC_NOT_REMOVED_BY_SHAPESHIFT ( \
@@ -2213,7 +2216,7 @@ enum ChatLinkColors
 {
     CHAT_LINK_COLOR_TALENT      = 0xff4e96f7,   // blue
     CHAT_LINK_COLOR_SPELL       = 0xff71d5ff,   // bright blue
-    CHAT_LINK_COLOR_ENCHANT     = 0xffffd000,   // orange
+    CHAT_LINK_COLOR_ENCHANT     = 0xffffffff,   // white
 };
 
 // Values from ItemPetFood (power of (value-1) used for compare with CreatureFamilyEntry.petDietMask

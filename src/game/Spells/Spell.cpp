@@ -281,6 +281,7 @@ Spell::Spell(Unit* caster, SpellEntry const *info, bool triggered, ObjectGuid or
     m_isChannelingVisual = false;
 
     m_applyMultiplierMask = 0;
+    m_absorbed = 0;
 
     // Get data for type of attack
     m_attackType = GetWeaponAttackType(m_spellInfo);
@@ -1284,6 +1285,7 @@ void Spell::DoAllEffectOnTarget(TargetInfo *target)
         }
 
         unitTarget->CalculateAbsorbResistBlock(caster, &damageInfo, m_spellInfo, BASE_ATTACK, this);
+        m_absorbed = damageInfo.absorb;
 
         caster->DealDamageMods(damageInfo.target, damageInfo.damage, &damageInfo.absorb);
         
@@ -1520,7 +1522,7 @@ void Spell::DoSpellHitOnUnit(Unit *unit, uint32 effectMask)
             if (!(m_spellInfo->AttributesEx & SPELL_ATTR_EX_NOT_BREAK_STEALTH))
             {
                 unit->RemoveSpellsCausingAura(SPELL_AURA_MOD_STEALTH);
-                unit->RemoveSpellsCausingAura(SPELL_AURA_MOD_INVISIBILITY);
+                unit->RemoveNonPassiveSpellsCausingAura(SPELL_AURA_MOD_INVISIBILITY);
             }
 
             // for delayed spells ignore not visible explicit target
@@ -1542,12 +1544,12 @@ void Spell::DoSpellHitOnUnit(Unit *unit, uint32 effectMask)
                 if (m_spellInfo->AttributesEx & SPELL_ATTR_EX_NOT_BREAK_STEALTH)
                 {
                     unit->RemoveSpellsCausingAura(SPELL_AURA_MOD_STEALTH);
-                    unit->RemoveSpellsCausingAura(SPELL_AURA_MOD_INVISIBILITY);
+                    unit->RemoveNonPassiveSpellsCausingAura(SPELL_AURA_MOD_INVISIBILITY);
                 }
 
                 // caster can be detected but have stealth aura
                 m_caster->RemoveSpellsCausingAura(SPELL_AURA_MOD_STEALTH);
-                m_caster->RemoveSpellsCausingAura(SPELL_AURA_MOD_INVISIBILITY);
+                m_caster->RemoveNonPassiveSpellsCausingAura(SPELL_AURA_MOD_INVISIBILITY);
 
                 // Fait dans Unit::DealDamage, car etre assis ou debout change le % de critiques par exemple.
                 //if (!unit->IsStandState() && !unit->hasUnitState(UNIT_STAT_STUNNED))
@@ -4194,6 +4196,17 @@ void Spell::finish(bool ok)
         m_caster->AttackStop();
         m_caster->InterruptSpell(CURRENT_AUTOREPEAT_SPELL);
     }
+    else if ((m_spellInfo->AttributesEx & SPELL_ATTR_EX_MELEE_COMBAT_START))
+    {
+        // Pets should initiate melee combat on spell with this flag. (Growl)
+        if (Pet* pPet = m_caster->ToPet())
+            if (pPet->AI() && pPet->GetCharmInfo())
+                if (Unit* const pTarget = m_targets.getUnitTarget())
+                {
+                    pPet->GetCharmInfo()->SetIsCommandAttack(true);
+                    pPet->AI()->AttackStart(pTarget);
+                }
+    }
 }
 
 void Spell::SendCastResult(SpellCastResult result)
@@ -4225,15 +4238,7 @@ void Spell::SendCastResult(Player* caster, SpellEntry const* spellInfo, SpellCas
                 data << uint32(spellInfo->RequiresSpellFocus);
                 break;
             case SPELL_FAILED_REQUIRES_AREA:
-                switch (spellInfo->Id)
-                {
-                    case 22564:
-                    case 22563:
-                    case 23538:
-                    case 23539:
-                        data << uint32(2597);
-                        break;
-                }
+                data << uint32(sSpellMgr.GetRequiredAreaForSpell(spellInfo->Id));
                 break;
             case SPELL_FAILED_EQUIPPED_ITEM_CLASS:
                 data << uint32(spellInfo->EquippedItemClass);
@@ -4992,7 +4997,8 @@ void Spell::HandleEffects(Unit *pUnitTarget, Item *pItemTarget, GameObject *pGOT
     if (eff < TOTAL_SPELL_EFFECTS)
         (*this.*SpellEffects[eff])(i);
     else
-        sLog.outError("WORLD: Spell FX %d > TOTAL_SPELL_EFFECTS ", eff);
+        sLog.outError("WORLD: Spell %u has effect %d at index %u > TOTAL_SPELL_EFFECTS",
+            m_spellInfo->Id, eff, i);
 }
 
 void Spell::AddTriggeredSpell(uint32 spellId)
@@ -5270,9 +5276,20 @@ SpellCastResult Spell::CheckCast(bool strict)
         if (!m_IsTriggeredSpell && IsDeathOnlySpell(m_spellInfo) && target->isAlive())
             return SPELL_FAILED_TARGET_NOT_DEAD;
 
+        // Check spell min target level
+        if ((m_spellInfo->MinTargetLevel > 0) && (int32(target->getLevel()) < m_spellInfo->MinTargetLevel))
+            return SPELL_FAILED_LOWLEVEL;
+
         // Check spell max target level
-        if (m_spellInfo->MaxTargetLevel > 0 && int32(target->getLevel()) > m_spellInfo->MaxTargetLevel)
+        if ((m_spellInfo->MaxTargetLevel > 0) && (int32(target->getLevel()) > m_spellInfo->MaxTargetLevel))
             return SPELL_FAILED_HIGHLEVEL;
+
+#if SUPPORTED_CLIENT_BUILD <= CLIENT_BUILD_1_11_2
+        // World of Warcraft Client Patch 1.12.0 (2006-08-22)
+        // - Pickpocket can now be used on targets that are in combat, as long as the rogue remains stealthed.
+        if ((m_spellInfo->AttributesEx & SPELL_ATTR_EX_IS_PICKPOCKET) && target->isInCombat())
+            return SPELL_FAILED_TARGET_IN_COMBAT;
+#endif
 
         bool non_caster_target = target != m_caster && !IsSpellWithCasterSourceTargetsOnly(m_spellInfo);
 
@@ -5443,7 +5460,7 @@ SpellCastResult Spell::CheckCast(bool strict)
                 return SPELL_FAILED_TARGET_AURASTATE;
 
         //Must be behind the target.
-        if (m_spellInfo->AttributesEx2 == 0x100000 && (m_spellInfo->AttributesEx & 0x200) == 0x200 && target->HasInArc(M_PI_F, m_caster))
+        if (IsFromBehindOnlySpell(m_spellInfo) && target->HasInArc(M_PI_F, m_caster))
         {
             SendInterrupted(2);
             return SPELL_FAILED_NOT_BEHIND;
@@ -6485,7 +6502,9 @@ SpellCastResult Spell::CheckCast(bool strict)
             }
             case SPELL_AURA_PERIODIC_MANA_LEECH:
             {
-                if (!m_targets.getUnitTarget())
+                if (!m_targets.getUnitTarget() && 
+                        !IsAreaEffectTarget(Targets(m_spellInfo->EffectImplicitTargetA[i])) &&
+                        !IsAreaEffectTarget(Targets(m_spellInfo->EffectImplicitTargetB[i])))
                     return SPELL_FAILED_BAD_IMPLICIT_TARGETS;
 
                 if (m_caster->GetTypeId() != TYPEID_PLAYER || m_CastItem)
@@ -6654,16 +6673,15 @@ SpellCastResult Spell::CheckCasterAuras() const
     SpellCastResult prevented_reason = SPELL_CAST_OK;
     // Have to check if there is a stun aura. Otherwise will have problems with ghost aura apply while logging out
     uint32 unitflag = m_caster->GetUInt32Value(UNIT_FIELD_FLAGS);     // Get unit state
-    /*[-ZERO]    if (unitflag & UNIT_FLAG_STUNNED && !(m_spellInfo->AttributesEx5 & SPELL_ATTR_EX5_USABLE_WHILE_STUNNED))
-            prevented_reason = SPELL_FAILED_STUNNED;
-        else if (unitflag & UNIT_FLAG_CONFUSED && !(m_spellInfo->AttributesEx5 & SPELL_ATTR_EX5_USABLE_WHILE_CONFUSED))
-            prevented_reason = SPELL_FAILED_CONFUSED;
-        else if (unitflag & UNIT_FLAG_FLEEING && !(m_spellInfo->AttributesEx5 & SPELL_ATTR_EX5_USABLE_WHILE_FEARED))
-            prevented_reason = SPELL_FAILED_FLEEING;
-        else */
-    if (m_spellInfo->PreventionType == SPELL_PREVENTION_TYPE_SILENCE &&
+    if (unitflag & UNIT_FLAG_STUNNED && !(mechanic_immune & (1 << (MECHANIC_STUN - 1u))))
+        prevented_reason = SPELL_FAILED_STUNNED;
+    else if (unitflag & UNIT_FLAG_CONFUSED && !(mechanic_immune & CONFUSED_MECHANIC_MASK))
+        prevented_reason = SPELL_FAILED_CONFUSED;
+    else if (unitflag & UNIT_FLAG_FLEEING && !(mechanic_immune & (1 << (MECHANIC_FEAR - 1u))))
+        prevented_reason = SPELL_FAILED_FLEEING;
+    else if (m_spellInfo->PreventionType == SPELL_PREVENTION_TYPE_SILENCE &&
             (unitflag & UNIT_FLAG_SILENCED ||
-             m_caster->IsSpellProhibited(m_spellInfo))) // Nostalrius : fix contresort des mobs.
+             m_caster->IsSpellProhibited(m_spellInfo))) // Nostalrius : fix counterspell for mobs.
         prevented_reason = SPELL_FAILED_SILENCED;
     else if (unitflag & UNIT_FLAG_PACIFIED && m_spellInfo->PreventionType == SPELL_PREVENTION_TYPE_PACIFY)
         prevented_reason = SPELL_FAILED_PACIFIED;
@@ -6697,20 +6715,19 @@ SpellCastResult Spell::CheckCasterAuras() const
                     // That is needed when your casting is prevented by multiple states and you are only immune to some of them.
                     switch (aura->GetModifier()->m_auraname)
                     {
-                        /* Zero
+                        
                         case SPELL_AURA_MOD_STUN:
-                            if (!(m_spellInfo->AttributesEx5 & SPELL_ATTR_EX5_USABLE_WHILE_STUNNED))
+                            if (!(mechanic_immune & (1 << (MECHANIC_STUN - 1u))))
                                 return SPELL_FAILED_STUNNED;
                             break;
                         case SPELL_AURA_MOD_CONFUSE:
-                            if (!(m_spellInfo->AttributesEx5 & SPELL_ATTR_EX5_USABLE_WHILE_CONFUSED))
+                            if (!(mechanic_immune & CONFUSED_MECHANIC_MASK))
                                 return SPELL_FAILED_CONFUSED;
                             break;
                         case SPELL_AURA_MOD_FEAR:
-                            if (!(m_spellInfo->AttributesEx5 & SPELL_ATTR_EX5_USABLE_WHILE_FEARED))
+                            if (!(mechanic_immune & (1 << (MECHANIC_FEAR - 1u))))
                                 return SPELL_FAILED_FLEEING;
                             break;
-                        */
                         case SPELL_AURA_MOD_SILENCE:
                         case SPELL_AURA_MOD_PACIFY:
                         case SPELL_AURA_MOD_PACIFY_SILENCE:
@@ -6826,11 +6843,8 @@ SpellCastResult Spell::CheckRange(bool strict)
         }
     }
 
-    //add radius of caster and ~5 yds "give" for non stricred (landing) check
-    float range_mod = strict ? 1.25f : 6.25;
-
-    // Add leeway bonus if both units are moving
-    range_mod += m_caster->GetLeewayBonusRange(target);
+    // Add up to ~5 yds "give" for non strict (landing) check and leeway bonus if both units are moving
+    float const range_mod = (strict ? (m_caster->IsPlayer() ? 1.25f : 0.0f) : (m_caster->IsPlayer() ? 6.25f : 2.25f)) + m_caster->GetLeewayBonusRange(target);
 
     SpellRangeEntry const* srange = sSpellRangeStore.LookupEntry(m_spellInfo->rangeIndex);
     float max_range = GetSpellMaxRange(srange);
@@ -6841,19 +6855,18 @@ SpellCastResult Spell::CheckRange(bool strict)
 
     max_range += range_mod;
 
-    GameObject* go = m_targets.getGOTarget(); // Check range d'un gobj pour crochetage
+    GameObject* go = m_targets.getGOTarget(); // Check range for gobjects (lock picking)
     if (go)
     {
-        // distance from target in checks
-        float dist = m_caster->GetDistance(go);
+        float const dist = m_caster->GetDistance(go);
 
         if (dist > max_range)
             return SPELL_FAILED_OUT_OF_RANGE;
     }
+
     if (target && target != m_caster)
     {
-        // distance from target in checks
-        float dist = m_caster->GetCombatDistance(target);
+        float const dist = m_caster->GetCombatDistance(target);
 
         if (dist > max_range)
             return SPELL_FAILED_OUT_OF_RANGE;
@@ -8216,6 +8229,7 @@ void Spell::ResetEffectDamageAndHeal()
 {
     m_damage = 0;
     m_healing = 0;
+    m_absorbed = 0;
 }
 
 void Spell::SetClientStarted(bool bisClientStarted)

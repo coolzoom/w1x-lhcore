@@ -322,7 +322,7 @@ void Unit::Update(uint32 update_diff, uint32 p_time)
 
     // extra attack
     Unit* victim = getVictim();
-    if (isInCombat() && m_doExtraAttacks && GetExtraAttacks() && victim && CanReachWithMeleeAttack(victim))
+    if (isInCombat() && m_doExtraAttacks && GetExtraAttacks() && victim && (CanAutoAttackTarget(victim) == ATTACK_RESULT_OK))
     {
         m_doExtraAttacks = false;
 
@@ -376,69 +376,110 @@ void Unit::Update(uint32 update_diff, uint32 p_time)
         _damageTakenHistory.clear();
 }
 
+AutoAttackCheckResult Unit::CanAutoAttackTarget(Unit const* pVictim) const
+{
+    if (hasUnitState(UNIT_STAT_CAN_NOT_REACT) || HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_PACIFIED))
+        return ATTACK_RESULT_CANT_ATTACK;
+
+    if (!pVictim->isAlive() || !isAlive())
+        return ATTACK_RESULT_DEAD;
+
+    if (!CanReachWithMeleeAttack(pVictim) || (!IsWithinLOSInMap(pVictim) && !hasUnitState(UNIT_STAT_ALLOW_LOS_ATTACK)))
+        return  ATTACK_RESULT_NOT_IN_RANGE;
+
+    if (!HasInArc(2 * M_PI_F / 3, pVictim))
+        return ATTACK_RESULT_BAD_FACING;
+
+    return ATTACK_RESULT_OK;
+}
+
+void Unit::DelayAutoAttacks()
+{
+    if (isAttackReady(BASE_ATTACK))
+        setAttackTimer(BASE_ATTACK, 100);
+    if (haveOffhandWeapon() && isAttackReady(OFF_ATTACK))
+        setAttackTimer(OFF_ATTACK, 100);
+}
+
 bool Unit::UpdateMeleeAttackingState()
 {
-    Unit* victim = getVictim();
-    if (!victim || IsNonMeleeSpellCasted(false))
+    Unit* pVictim = getVictim();
+
+    if (!pVictim || IsNonMeleeSpellCasted(false))
         return false;
 
     if (!isAttackReady(BASE_ATTACK) && !(isAttackReady(OFF_ATTACK) && haveOffhandWeapon()))
         return false;
 
-    uint8 swingError = 0;
-    if (!CanReachWithMeleeAttack(victim) || (!IsWithinLOSInMap(victim) && !hasUnitState(UNIT_STAT_ALLOW_LOS_ATTACK)))
+    AutoAttackCheckResult swingError = CanAutoAttackTarget(pVictim);
+
+    Player* pPlayer = ToPlayer();
+    switch (swingError)
     {
-        if (isAttackReady(BASE_ATTACK))
-            setAttackTimer(BASE_ATTACK, 100);
-        if (haveOffhandWeapon() && isAttackReady(OFF_ATTACK))
-            setAttackTimer(OFF_ATTACK, 100);
-        swingError = 1;
-    }
-    // 120 degrees of radiant range
-    else if (!HasInArc(2 * M_PI_F / 3, victim))
-    {
-        if (isAttackReady(BASE_ATTACK))
-            setAttackTimer(BASE_ATTACK, 100);
-        if (haveOffhandWeapon() && isAttackReady(OFF_ATTACK))
-            setAttackTimer(OFF_ATTACK, 100);
-        swingError = 2;
-    }
-    else
-    {
-        if (isAttackReady(BASE_ATTACK))
+        case ATTACK_RESULT_OK:
         {
-            // prevent base and off attack in same time, delay attack at 0.2 sec
-            if (haveOffhandWeapon())
+            if (isAttackReady(BASE_ATTACK))
             {
-                if (getAttackTimer(OFF_ATTACK) < ATTACK_DISPLAY_DELAY)
-                    setAttackTimer(OFF_ATTACK, ATTACK_DISPLAY_DELAY);
+                // prevent base and off attack in same time, delay attack at 0.2 sec
+                if (haveOffhandWeapon())
+                {
+                    if (getAttackTimer(OFF_ATTACK) < ATTACK_DISPLAY_DELAY)
+                        setAttackTimer(OFF_ATTACK, ATTACK_DISPLAY_DELAY);
+                }
+                AttackerStateUpdate(pVictim, BASE_ATTACK, false);
+                resetAttackTimer(BASE_ATTACK);
             }
-            AttackerStateUpdate(victim, BASE_ATTACK, false);
-            resetAttackTimer(BASE_ATTACK);
+            if (haveOffhandWeapon() && isAttackReady(OFF_ATTACK))
+            {
+                // prevent base and off attack in same time, delay attack at 0.2 sec
+                uint32 base_att = getAttackTimer(BASE_ATTACK);
+                if (base_att < ATTACK_DISPLAY_DELAY)
+                    setAttackTimer(BASE_ATTACK, ATTACK_DISPLAY_DELAY);
+                // do attack
+                AttackerStateUpdate(pVictim, OFF_ATTACK, false);
+                resetAttackTimer(OFF_ATTACK);
+            }
+            break;
         }
-        if (haveOffhandWeapon() && isAttackReady(OFF_ATTACK))
+        case ATTACK_RESULT_NOT_IN_RANGE:
         {
-            // prevent base and off attack in same time, delay attack at 0.2 sec
-            uint32 base_att = getAttackTimer(BASE_ATTACK);
-            if (base_att < ATTACK_DISPLAY_DELAY)
-                setAttackTimer(BASE_ATTACK, ATTACK_DISPLAY_DELAY);
-            // do attack
-            AttackerStateUpdate(victim, OFF_ATTACK, false);
-            resetAttackTimer(OFF_ATTACK);
+            DelayAutoAttacks();
+            if (pPlayer && pPlayer->GetLastSwingErrorMsg() != ATTACK_RESULT_NOT_IN_RANGE)
+                pPlayer->SendAttackSwingNotInRange();
+            break;
+        }
+        case ATTACK_RESULT_BAD_FACING:
+        {
+            DelayAutoAttacks();
+            if (pPlayer && pPlayer->GetLastSwingErrorMsg() != ATTACK_RESULT_BAD_FACING)
+                pPlayer->SendAttackSwingBadFacingAttack();
+            break;
+        }
+        case ATTACK_RESULT_CANT_ATTACK:
+        {
+            DelayAutoAttacks();
+            break;
+        }
+        case ATTACK_RESULT_DEAD:
+        {
+            AttackStop(true);
+            if (pPlayer && pPlayer->GetLastSwingErrorMsg() != ATTACK_RESULT_DEAD)
+                pPlayer->SendAttackSwingDeadTarget();
+            break;
+        }
+        case ATTACK_RESULT_FRIENDLY_TARGET:
+        {
+            AttackStop(true);
+            if (pPlayer && pPlayer->GetLastSwingErrorMsg() != ATTACK_RESULT_FRIENDLY_TARGET)
+                pPlayer->SendAttackSwingCantAttack();
+            break;
         }
     }
+        
+    if (pPlayer)
+        pPlayer->SetSwingErrorMsg(swingError); 
 
-    Player* player = (GetTypeId() == TYPEID_PLAYER ? (Player*)this : NULL);
-    if (player && swingError != player->LastSwingErrorMsg())
-    {
-        if (swingError == 1)
-            player->SendAttackSwingNotInRange();
-        else if (swingError == 2)
-            player->SendAttackSwingBadFacingAttack();
-        player->SwingErrorMsg(swingError);
-    }
-
-    return swingError == 0;
+    return swingError == ATTACK_RESULT_OK;
 }
 
 bool Unit::haveOffhandWeapon() const
@@ -479,6 +520,20 @@ void Unit::RemoveSpellsCausingAura(AuraType auraType)
     {
         RemoveAurasDueToSpell((*iter)->GetId());
         iter = m_modAuras[auraType].begin();
+    }
+}
+
+void Unit::RemoveNonPassiveSpellsCausingAura(AuraType auraType)
+{
+    for (AuraList::const_iterator iter = m_modAuras[auraType].begin(); iter != m_modAuras[auraType].end();)
+    {
+        if (!((*iter)->GetSpellProto()->Attributes & SPELL_ATTR_PASSIVE))
+        {
+            RemoveAurasDueToSpell((*iter)->GetId());
+            iter = m_modAuras[auraType].begin();
+        }
+        else
+            iter++;
     }
 }
 
@@ -668,7 +723,7 @@ uint32 Unit::DealDamage(Unit *pVictim, uint32 damage, CleanDamage const* cleanDa
         RemoveSpellsCausingAura(SPELL_AURA_FEIGN_DEATH);
 
         if (pVictim != this)
-            RemoveSpellsCausingAura(SPELL_AURA_MOD_INVISIBILITY);
+            RemoveNonPassiveSpellsCausingAura(SPELL_AURA_MOD_INVISIBILITY);
 
         if (pVictim->GetTypeId() == TYPEID_PLAYER && !pVictim->IsMounted() && !pVictim->IsStandState())
             pVictim->SetStandState(UNIT_STAND_STATE_STAND);
@@ -1251,9 +1306,11 @@ void Unit::Kill(Unit* pVictim, SpellEntry const *spellProto, bool durabilityLoss
                     creature->SetFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_LOOTABLE);
         }
 
-        // Call creature just died function
         if (creature->AI())
             creature->AI()->JustDied(this);
+
+        if (CreatureGroup* group = creature->GetCreatureGroup())
+            group->OnMemberDied(creature);
 
         if (creature->IsTemporarySummon())
         {
@@ -2473,12 +2530,6 @@ void Unit::CalculateAbsorbResistBlock(Unit *pCaster, SpellNonMeleeDamage *damage
 
 void Unit::AttackerStateUpdate(Unit *pVictim, WeaponAttackType attType, bool checkLoS, bool extra)
 {
-    if (hasUnitState(UNIT_STAT_CAN_NOT_REACT) || HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_PACIFIED))
-        return;
-
-    if (!pVictim->isAlive() || !isAlive())
-        return;
-
     if (!extra && IsNonMeleeSpellCasted(false))
         return;
 
@@ -2765,6 +2816,9 @@ uint32 Unit::CalculateDamage(WeaponAttackType attType, bool normalized, uint8 in
                 break;
         }
     }
+
+    if (min_damage < 0) min_damage = 0.0f;
+    if (max_damage < 0) max_damage = 0.0f;
 
     if (min_damage > max_damage)
         std::swap(min_damage, max_damage);
@@ -5257,7 +5311,7 @@ typedef std::list<RemovedSpellData> RemoveSpellList;
 
 void Unit::ProcDamageAndSpell(Unit *pVictim, uint32 procAttacker, uint32 procVictim, uint32 procExtra, uint32 amount, WeaponAttackType attType, SpellEntry const *procSpell, Spell* spell)
 {
-    if (!IsInWorld())
+    if ((pVictim && !IsInMap(pVictim)) || !IsInWorld())
         return;
 
     ProcTriggeredList procTriggered;
@@ -7478,20 +7532,8 @@ bool Unit::isTargetableForAttack(bool inverseAlive /*=false*/, bool isAttackerPl
     if (!CanBeDetected())
         return false;
 
-    if (const Player* player = GetCharmerOrOwnerPlayerOrPlayerItself())
-    {
-        if (player->isGameMaster())
-            return false;
-
-        // in such case, unlike a creature, a charmed Player can be targeted even if his charmer can't
-        if (const Player* charmedPlayer = ToPlayer())
-            player = charmedPlayer;
-
-        if (player->watching_cinematic_entry != 0 ||
-            player->IsPendingFarTeleport() ||
-            player->IsPendingInstanceSwitch())
-            return false;
-    }
+    if (GetTypeId() == TYPEID_PLAYER && (((Player *)this)->isGameMaster() || ((Player*)this)->watching_cinematic_entry != 0))
+        return false;
 
     if (HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_NOT_SELECTABLE))
         return false;
@@ -7499,20 +7541,19 @@ bool Unit::isTargetableForAttack(bool inverseAlive /*=false*/, bool isAttackerPl
     if (isAttackerPlayer && HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PLAYER))
         return false;
 
+    // Players or their pets can attack feigned players
+    if (!isAttackerPlayer && hasUnitState(UNIT_STAT_DIED))
+        return false;
+
     // inversealive is needed for some spells which need to be casted at dead targets (aoe)
     if (isAlive() == inverseAlive)
         return false;
 
-    return IsInWorld() && !hasUnitState(UNIT_STAT_DIED) && !IsTaxiFlying();
-}
-
-bool Unit::IsValidAttackTarget(Unit const* target) const
-{
-    return _IsValidAttackTarget(target, nullptr);
+    return IsInWorld() && !IsTaxiFlying();
 }
 
 // function based on function Unit::CanAttack from 13850 client
-bool Unit::_IsValidAttackTarget(Unit const* target, SpellEntry const* bySpell, WorldObject const* obj) const
+bool Unit::IsValidAttackTarget(Unit const* target) const
 {
     ASSERT(target);
     // can't attack self
@@ -7530,6 +7571,9 @@ bool Unit::_IsValidAttackTarget(Unit const* target, SpellEntry const* bySpell, W
     if (target->HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE | UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_TAXI_FLIGHT | UNIT_FLAG_NOT_ATTACKABLE_1 | UNIT_FLAG_UNK_16))
         return false;
 
+    if (IsPlayer() && target->HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_IMMUNE_TO_PLAYER))
+        return false;
+
     // CvC case - can attack each other only when one of them is hostile
     if (!HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_PVP_ATTACKABLE) && !target->HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_PVP_ATTACKABLE))
         return GetReactionTo(target) <= REP_HOSTILE || target->GetReactionTo(this) <= REP_HOSTILE;
@@ -7540,8 +7584,8 @@ bool Unit::_IsValidAttackTarget(Unit const* target, SpellEntry const* bySpell, W
             || target->GetReactionTo(this) > REP_NEUTRAL)
         return false;
 
-    Player const* playerAffectingAttacker = HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_PVP_ATTACKABLE) ? GetAffectingPlayer() : NULL;
-    Player const* playerAffectingTarget = target->HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_PVP_ATTACKABLE) ? target->GetAffectingPlayer() : NULL;
+    Player const* playerAffectingAttacker = HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_PVP_ATTACKABLE) ? GetAffectingPlayer() : nullptr;
+    Player const* playerAffectingTarget = target->HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_PVP_ATTACKABLE) ? target->GetAffectingPlayer() : nullptr;
 
     // Not all neutral creatures can be attacked
     if (GetReactionTo(target) == REP_NEUTRAL &&
@@ -7703,13 +7747,6 @@ bool Unit::isVisibleForOrDetect(Unit const* u, WorldObject const* viewPoint, boo
     // redundant phasing
     //if (!u->CanSeeInWorld(this))
     //    return false;
-
-    if (Creature* pCreature = (Creature*)ToCreature())
-    {
-        bool bVisible = false;
-        if (pCreature->AI() && pCreature->AI()->IsVisibleFor(u, bVisible))
-            return bVisible;
-    }
 
     // Visible units are always visible for all units
     if (m_Visibility == VISIBILITY_ON)
@@ -8021,7 +8058,8 @@ void Unit::UpdateSpeed(UnitMoveType mtype, bool forced, float ratio)
     {
         // Before patch 1.9 pets should retain their wild speed, after that they are normalised
         Creature* pCreature = (Creature*)this;
-        if (!(pCreature->IsPet() && pCreature->GetOwnerGuid().IsPlayer()) || (sWorld.GetWowPatch() < WOW_PATCH_109))
+        if (!(pCreature->IsPet() && pCreature->GetOwnerGuid().IsPlayer()) || 
+            (sWorld.GetWowPatch() < WOW_PATCH_109 && sWorld.getConfig(CONFIG_BOOL_ACCURATE_PETS)))
         {
             switch (mtype)
             {
@@ -8250,7 +8288,7 @@ float Unit::ApplyTotalThreatModifier(float threat, SpellSchoolMask schoolMask)
 void Unit::AddThreat(Unit* pVictim, float threat /*= 0.0f*/, bool crit /*= false*/, SpellSchoolMask schoolMask /*= SPELL_SCHOOL_MASK_NONE*/, SpellEntry const *threatSpell /*= NULL*/)
 {
     // Only mobs can manage threat lists
-    if (CanHaveThreatList())
+    if (CanHaveThreatList() && IsInMap(pVictim))
         m_ThreatManager.addThreat(pVictim, threat, crit, schoolMask, threatSpell, false);
 }
 
@@ -9805,28 +9843,40 @@ void Unit::ModConfuseSpell(bool apply, ObjectGuid casterGuid, uint32 spellID, Mo
     }
 }
 
-void Unit::SetFeignDeath(bool apply, ObjectGuid casterGuid, uint32 /*spellID*/)
+void Unit::SetFeignDeath(bool apply, ObjectGuid casterGuid, bool success)
 {
-    // [TODO] SMSG_FEIGN_DEATH_RESISTED sert a quoi ? - il affiche 'Resiste' en notify.
     if (apply)
     {
         m_movementInfo.RemoveMovementFlag(MOVEFLAG_MASK_MOVING_OR_TURN);
         if (GetTypeId() != TYPEID_PLAYER)
             StopMoving();
 
+        if (!success)
+        {
+            if (Player* plr = ToPlayer())
+            {
+                plr->SendFeignDeathResisted();
+                plr->SendAttackSwingCancelAttack();
+            }
+        }
+        else
+        {
+            InterruptSpellsCastedOnMe();
+
+            addUnitState(UNIT_STAT_DIED);
+            CombatStop();
+            RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_IMMUNE_OR_LOST_SELECTION);
+
+            getHostileRefManager().deleteReferences();
+        }
 
         SetFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_UNK_29);
         SetFlag(UNIT_DYNAMIC_FLAGS, UNIT_DYNFLAG_DEAD);
-
-        addUnitState(UNIT_STAT_DIED);
-        CombatStop();
-        RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_IMMUNE_OR_LOST_SELECTION);
-
+        
         // prevent interrupt message
         if (casterGuid == GetObjectGuid())
             FinishSpell(CURRENT_GENERIC_SPELL, false);
         InterruptNonMeleeSpells(true);
-        getHostileRefManager().deleteReferences();
     }
     else
     {
@@ -10122,10 +10172,6 @@ void Unit::ApplyAttackTimePercentMod(WeaponAttackType att, float val, bool apply
 {
     if (val > 0)
     {
-#if SUPPORTED_CLIENT_BUILD < CLIENT_BUILD_1_12_1
-        val = -val;
-        apply = !apply;
-#endif
         ApplyPercentModFloatVar(m_modAttackSpeedPct[att], val, !apply);
         ApplyPercentModFloatValue(UNIT_FIELD_BASEATTACKTIME + att, val, !apply);
 
@@ -10650,7 +10696,7 @@ void Unit::InterruptSpellsCastedOnMe(bool killDelayed, bool interruptPositiveSpe
     }
 }
 
-void Unit::InterruptAttacksOnMe(float dist)
+void Unit::InterruptAttacksOnMe(float dist, bool guard_check)
 {
     if (dist == 0.0f)
         dist = GetMap()->GetVisibilityDistance();
@@ -10665,6 +10711,8 @@ void Unit::InterruptAttacksOnMe(float dist)
     for (std::list<Unit*>::iterator iter = targets.begin(); iter != targets.end(); ++iter)
     {
         if ((*iter)->getVictim() != this)
+            continue;
+        if (guard_check && (*iter)->IsContestedGuard())
             continue;
         (*iter)->AttackStop();
         if (Player* pAttacker = (*iter)->ToPlayer())
@@ -11084,7 +11132,7 @@ SpellAuraHolder* Unit::AddAura(uint32 spellId, uint32 addAuraFlags, Unit* pCaste
     if (!IsSpellAppliesAura(spellInfo, (1 << EFFECT_INDEX_0) | (1 << EFFECT_INDEX_1) | (1 << EFFECT_INDEX_2)) &&
             !IsSpellHaveEffect(spellInfo, SPELL_EFFECT_PERSISTENT_AREA_AURA))
     {
-        sLog.outError("Impossible d'appliquer le sort %u : il n'a pas d'aura !", spellInfo->Id);
+        sLog.outError("Cannot apply aura with Id %u : spell does not have auras!", spellInfo->Id);
         return nullptr;
     }
 
@@ -11433,6 +11481,16 @@ void Unit::TransferAttackersThreatTo(Unit* unit)
     ThreatTransferDo u_do(this, unit);
     MaNGOS::CreatureWorker<ThreatTransferDo> worker(this, u_do);
     Cell::VisitGridObjects(this, worker, 50.0f);
+}
+
+void Unit::RemoveAttackersThreat(Unit* owner)
+{
+    for (AttackerSet::iterator itr = m_attackers.begin(); itr != m_attackers.end(); ++itr)
+    {
+        (*itr)->getThreatManager().modifyThreatPercent(this, -100);
+        if (owner)
+            (*itr)->AddThreat(owner, 1.0f);
+    }
 }
 
 void Unit::SetMovement(UnitMovementType pType)

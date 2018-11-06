@@ -551,6 +551,16 @@ enum NPCFlags
     UNIT_NPC_FLAG_OUTDOORPVP            = 0x20000000,       // custom flag for outdoor pvp creatures || Custom flag
 };
 
+enum AutoAttackCheckResult
+{
+    ATTACK_RESULT_OK = 0,
+    ATTACK_RESULT_NOT_IN_RANGE = 1,
+    ATTACK_RESULT_BAD_FACING = 2,
+    ATTACK_RESULT_CANT_ATTACK = 3,
+    ATTACK_RESULT_DEAD = 4,
+    ATTACK_RESULT_FRIENDLY_TARGET = 5,
+};
+
 namespace Movement
 {
     class MoveSpline;
@@ -998,6 +1008,8 @@ class MANGOS_DLL_SPEC Unit : public WorldObject
         bool isAttackReady(WeaponAttackType type = BASE_ATTACK) const;
         bool haveOffhandWeapon() const;
         bool UpdateMeleeAttackingState();
+        void DelayAutoAttacks();
+        virtual AutoAttackCheckResult CanAutoAttackTarget(Unit const*) const;
         bool CanUseEquippedWeapon(WeaponAttackType attackType) const
         {
             if (IsInFeralForm())
@@ -1294,7 +1306,6 @@ class MANGOS_DLL_SPEC Unit : public WorldObject
         void RemoveFearEffectsByDamageTaken(uint32 damage, uint32 exceptSpellId, DamageEffectType damagetype);
 
         bool IsValidAttackTarget(Unit const* target) const;
-        bool _IsValidAttackTarget(Unit const* target, SpellEntry const* bySpell = nullptr, WorldObject const* obj = nullptr) const;
         bool isTargetableForAttack(bool inversAlive = false, bool isAttackerPlayer = false) const;
         bool isAttackableByAOE(bool requireDeadTarget = false, bool isCasterPlayer = false) const;
         bool isPassiveToHostile() const { return HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_PASSIVE); }
@@ -1469,6 +1480,7 @@ class MANGOS_DLL_SPEC Unit : public WorldObject
         void RemoveNotOwnSingleTargetAuras();
         void RemoveAurasAtMechanicImmunity(uint32 mechMask, uint32 exceptSpellId, bool non_positive = false);
         void RemoveSpellsCausingAura(AuraType auraType);
+        void RemoveNonPassiveSpellsCausingAura(AuraType auraType);
         void RemoveSpellsCausingAura(AuraType auraType, SpellAuraHolder* except);
         void RemoveRankAurasDueToSpell(uint32 spellId);
         bool RemoveNoStackAurasDueToAuraHolder(SpellAuraHolder *holder);
@@ -1760,6 +1772,7 @@ class MANGOS_DLL_SPEC Unit : public WorldObject
         void removeFollower(FollowerReference* /*pRef*/ ) { /* nothing to do yet */ }
 
         MotionMaster* GetMotionMaster() { return &i_motionMaster; }
+        MotionMaster const* GetMotionMaster() const { return &i_motionMaster; }
 
         bool IsStopped() const { return !(hasUnitState(UNIT_STAT_MOVING)); }
         void StopMoving(bool force = false);
@@ -1767,13 +1780,13 @@ class MANGOS_DLL_SPEC Unit : public WorldObject
         void SetFleeing(bool apply, ObjectGuid casterGuid = ObjectGuid(), uint32 spellID = 0, uint32 time = 0);
         void SetFeared(bool apply, ObjectGuid casterGuid = ObjectGuid(), uint32 spellID = 0, uint32 time = 0);/*DEPRECATED METHOD*/
         void SetConfused(bool apply, ObjectGuid casterGuid = ObjectGuid(), uint32 spellID = 0);/*DEPRECATED METHOD*/
-        void SetFeignDeath(bool apply, ObjectGuid casterGuid = ObjectGuid(), uint32 spellID = 0);/*DEPRECATED METHOD*/
+        void SetFeignDeath(bool apply, ObjectGuid casterGuid = ObjectGuid(), bool success = true);
 
         void InterruptSpellsCastedOnMe(bool killDelayed = false, bool interruptPositiveSpells = false);
         uint32 DespawnNearCreaturesByEntry(uint32 entry, float range);
         uint32 RespawnNearCreaturesByEntry(uint32 entry, float range);
         uint32 DespawnHostileCreaturesInRange(float range = 0.0f);
-        void InterruptAttacksOnMe(float dist=0.0f); // Interrompt toutes les "auto-attaques"
+        void InterruptAttacksOnMe(float dist=0.0f, bool guard_check = false); // Interrompt toutes les "auto-attaques"
         void CombatStopInRange(float dist=0.0f); // CombatStop tous les ennemis
 
         void AddComboPointHolder(uint32 lowguid) { m_ComboPointHolders.insert(lowguid); }
@@ -1853,7 +1866,7 @@ class MANGOS_DLL_SPEC Unit : public WorldObject
         virtual void OnMoveTo(float, float, float) {}
 
         // Appele dans SpellEffects::EffectSummonPet et apres un rez en BG.
-        ObjectGuid EffectSummonPet(uint32 spellId, uint32 petEntry);
+        ObjectGuid EffectSummonPet(uint32 spellId, uint32 petEntry, uint32 petLevel);
         void ModPossess(Unit* target, bool apply, AuraRemoveMode m_removeMode = AURA_REMOVE_BY_DEFAULT);
 
         // Caster ?
@@ -1892,6 +1905,7 @@ class MANGOS_DLL_SPEC Unit : public WorldObject
 
         // Nostalrius - en fin de CM par exemple
         void TransferAttackersThreatTo(Unit* unit);
+        void RemoveAttackersThreat(Unit* owner);
 
         bool IsInPartyWith(Unit const* unit) const;
         bool IsInRaidWith(Unit const* unit) const;

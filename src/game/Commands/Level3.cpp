@@ -338,6 +338,14 @@ bool ChatHandler::HandleReloadQuestGreetingCommand(char* /*args*/)
     return true;
 }
 
+bool ChatHandler::HandleReloadTrainerGreetingCommand(char* /*args*/)
+{
+    sLog.outString("Re-Loading Trainer Greetings...");
+    sObjectMgr.LoadTrainerGreetings();
+    SendSysMessage("DB table `npc_trainer_greeting` reloaded.");
+    return true;
+}
+
 bool ChatHandler::HandleReloadLootTemplatesCreatureCommand(char* /*args*/)
 {
     sLog.outString("Re-Loading Loot Tables... (`creature_loot_template`)");
@@ -4759,13 +4767,7 @@ bool ChatHandler::HandleChangeWeatherCommand(char* args)
 
     Player* player = m_session->GetPlayer();
     uint32 zoneId = player->GetZoneId();
-    if (!sWeatherMgr.GetWeatherChances(zoneId))
-    {
-        SendSysMessage(LANG_NO_WEATHER);
-        SetSentErrorMessage(true);
-    }
     player->GetMap()->SetWeather(zoneId, (WeatherType)type, grade, false);
-
     return true;
 }
 
@@ -5682,6 +5684,12 @@ bool ChatHandler::HandleUnBanHelper(BanMode mode, char* args)
 
     std::string nameOrIP = cnameOrIP;
 
+    char* message = ExtractQuotedOrLiteralArg(&args);
+    if (!message)
+        return false;
+
+    std::string unbanMessage(message);
+
     switch (mode)
     {
         case BAN_ACCOUNT:
@@ -5706,8 +5714,10 @@ bool ChatHandler::HandleUnBanHelper(BanMode mode, char* args)
             break;
     }
 
-    if (sWorld.RemoveBanAccount(mode, nameOrIP))
-        PSendSysMessage(LANG_UNBAN_UNBANNED, nameOrIP.c_str());
+    std::string source = m_session ? m_session->GetPlayerName() : "CONSOLE";
+
+    if (sWorld.RemoveBanAccount(mode, source, unbanMessage, nameOrIP))
+        PSendSysMessage(LANG_UNBAN_UNBANNED, nameOrIP.c_str(), unbanMessage.c_str());
     else
         PSendSysMessage(LANG_UNBAN_ERROR, nameOrIP.c_str());
 
@@ -5731,7 +5741,7 @@ bool ChatHandler::HandleBanInfoCharacterCommand(char* args)
 {
     Player* target;
     ObjectGuid target_guid;
-    if (!ExtractPlayerTarget(&args, &target, &target_guid))
+    if (!ExtractPlayerTarget(&args, &target, &target_guid,NULL,true))
         return false;
 
     uint32 accountid = target ? target->GetSession()->GetAccountId() : sObjectMgr.GetPlayerAccountIdByGUID(target_guid);

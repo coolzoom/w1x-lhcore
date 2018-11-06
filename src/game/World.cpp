@@ -505,8 +505,6 @@ void World::LoadConfigSettings(bool reload)
     setConfigPos(CONFIG_FLOAT_LISTEN_RANGE_TEXTEMOTE, "ListenRange.TextEmote", 25.0f);
 
     setConfigPos(CONFIG_FLOAT_GROUP_XP_DISTANCE, "MaxGroupXPDistance", 74.0f);
-    setConfigPos(CONFIG_FLOAT_SIGHT_GUARDER,     "GuarderSight",       50.0f);
-    setConfigPos(CONFIG_FLOAT_SIGHT_MONSTER,     "MonsterSight",       50.0f);
 
     setConfigPos(CONFIG_FLOAT_CREATURE_FAMILY_ASSISTANCE_RADIUS,      "CreatureFamilyAssistanceRadius",     10.0f);
     setConfigPos(CONFIG_FLOAT_CREATURE_FAMILY_FLEE_ASSISTANCE_RADIUS, "CreatureFamilyFleeAssistanceRadius", 30.0f);
@@ -730,16 +728,8 @@ void World::LoadConfigSettings(bool reload)
 
     setConfig(CONFIG_BOOL_PET_UNSUMMON_AT_MOUNT,      "PetUnsummonAtMount", false);
 
-    if (GetWowPatch() >= WOW_PATCH_112)
-    {
-        setConfig(CONFIG_BOOL_OUTDOORPVP_EP_ENABLE, "OutdoorPvP.EP.Enable", true);
-        setConfig(CONFIG_BOOL_OUTDOORPVP_SI_ENABLE, "OutdoorPvP.SI.Enable", true);
-    }
-    else
-    {
-        setConfig(CONFIG_BOOL_OUTDOORPVP_EP_ENABLE, false);
-        setConfig(CONFIG_BOOL_OUTDOORPVP_SI_ENABLE, false);
-    }
+    setConfig(CONFIG_BOOL_OUTDOORPVP_EP_ENABLE, "OutdoorPvP.EP.Enable", true);
+    setConfig(CONFIG_BOOL_OUTDOORPVP_SI_ENABLE, "OutdoorPvP.SI.Enable", true);
 
     setConfig(CONFIG_UINT32_ANTIFLOOD_SANCTION,       "Antiflood.Sanction", CHEAT_ACTION_KICK);
 
@@ -869,9 +859,17 @@ void World::LoadConfigSettings(bool reload)
     LoadNostalriusConfig(reload);
 
     // PvP options
-    setConfig(CONFIG_BOOL_ACCURATE_PVP_EQUIP_REQUIREMENTS, "PvP.AccurateEquipRequirements", false);
-    setConfig(CONFIG_BOOL_ACCURATE_PVP_PURCHASE_REQUIREMENTS, "PvP.AccuratePurchaseRequirements", false);
-    setConfig(CONFIG_BOOL_ACCURATE_PVP_ZONE_REQUIREMENTS, "PvP.AccurateZoneRequirements", false);
+    setConfig(CONFIG_BOOL_ACCURATE_PVP_EQUIP_REQUIREMENTS, "PvP.AccurateEquipRequirements", true);
+    setConfig(CONFIG_BOOL_ACCURATE_PVP_PURCHASE_REQUIREMENTS, "PvP.AccuratePurchaseRequirements", true);
+    setConfig(CONFIG_BOOL_ACCURATE_PVP_ZONE_REQUIREMENTS, "PvP.AccurateZoneRequirements", true);
+    setConfig(CONFIG_BOOL_ACCURATE_PVP_TIMELINE, "PvP.AccurateTimeline", true);
+    setConfig(CONFIG_BOOL_ACCURATE_PVP_REWARDS, "PvP.AccurateRewards", true);
+
+    setConfig(CONFIG_BOOL_ACCURATE_MOUNTS, "Progression.AccurateMountSkillTraining", true);
+    setConfig(CONFIG_BOOL_ACCURATE_PETS, "Progression.AccuratePetStatistics", true);
+    setConfig(CONFIG_BOOL_ACCURATE_LFG, "Progression.AccurateLFGAvailability", true);
+    setConfig(CONFIG_BOOL_ACCURATE_PVE_EVENTS, "Progression.AccuratePVEEvents", true);
+    setConfig(CONFIG_BOOL_ACCURATE_SPELL_EFFECTS, "Progression.AccurateSpellEffects", true);
 
     setConfig(CONFIG_UINT32_CREATURE_SUMMON_LIMIT, "MaxCreatureSummonLimit", DEFAULT_CREATURE_SUMMON_LIMIT);
 
@@ -921,7 +919,15 @@ void World::LoadNostalriusConfig(bool reload)
     setConfig(CONFIG_UINT32_MAPUPDATE_MIN_VISIBILITY_DISTANCE,                  "MapUpdate.MinVisibilityDistance", 0);
 
     setConfigMinMax(CONFIG_UINT32_SPELLS_CCDELAY, "Spells.CCDelay", 200, 0, 20000);
-    setConfigMinMax(CONFIG_UINT32_DEBUFF_LIMIT, "DebuffLimit", 16, 1, 40);
+    setConfigMinMax(CONFIG_UINT32_DEBUFF_LIMIT, "DebuffLimit", 0, 0, 40);
+    // If max debuff slots is at 0, decide based on patch.
+    if (getConfig(CONFIG_UINT32_DEBUFF_LIMIT) == 0)
+    {
+        if (GetWowPatch() >= WOW_PATCH_107)
+            setConfig(CONFIG_UINT32_DEBUFF_LIMIT, 16);
+        else
+            setConfig(CONFIG_UINT32_DEBUFF_LIMIT, 8);
+    }
     setConfigMinMax(CONFIG_UINT32_MAX_POINTS_PER_MVT_PACKET, "Movement.MaxPointsPerPacket", 80, 5, 10000);
     setConfigMinMax(CONFIG_UINT32_RELOCATION_VMAP_CHECK_TIMER, "Movement.RelocationVmapsCheckDelay", 0, 0, 2000);
 
@@ -949,6 +955,8 @@ void World::LoadNostalriusConfig(bool reload)
     setConfig(CONFIG_FLOAT_DYN_RESPAWN_MAX_REDUCTION_RATE,              "DynamicRespawn.MaxReductionRate", 0.0f);
     setConfig(CONFIG_FLOAT_DYN_RESPAWN_PERCENT_PER_PLAYER,              "DynamicRespawn.PercentPerPlayer", 0.0f);
     setConfig(CONFIG_UINT32_DYN_RESPAWN_MIN_RESPAWN_TIME,               "DynamicRespawn.MinRespawnTime", 0);
+    setConfig(CONFIG_UINT32_DYN_RESPAWN_MIN_RESPAWN_TIME_ELITE,         "DynamicRespawn.MinEliteRespawnTime", 0);
+    setConfig(CONFIG_UINT32_DYN_RESPAWN_MIN_RESPAWN_TIME_INDOORS,       "DynamicRespawn.MinIndoorRespawnTime", 0);
     setConfig(CONFIG_UINT32_DYN_RESPAWN_AFFECT_RESPAWN_TIME_BELOW,      "DynamicRespawn.AffectRespawnTimeBelow", 0);
     setConfig(CONFIG_UINT32_DYN_RESPAWN_AFFECT_LEVEL_BELOW,             "DynamicRespawn.AffectLevelBelow", 0);
     setConfig(CONFIG_UINT32_DYN_RESPAWN_PLAYERS_THRESHOLD,              "DynamicRespawn.PlayersThreshold", 0);
@@ -956,6 +964,10 @@ void World::LoadNostalriusConfig(bool reload)
     setConfig(CONFIG_UINT32_CHANNEL_INVITE_MIN_LEVEL,                   "ChannelInvite.MinLevel", 10);
     setConfig(CONFIG_BOOL_WHISPER_RESTRICTION,                          "WhisperRestriction", false);
     setConfig(CONFIG_UINT32_WORLD_CHAN_MIN_LEVEL,                       "WorldChan.MinLevel", 0);
+    setConfig(CONFIG_UINT32_WORLD_CHAN_CD,                              "WorldChan.Cooldown", 0);
+    setConfig(CONFIG_UINT32_WORLD_CHAN_CD_MAX_LEVEL,                    "WorldChan.CooldownMaxLevel", 0);
+    setConfig(CONFIG_UINT32_WORLD_CHAN_CD_SCALING,                      "WorldChan.CooldownScaling", 0);
+    setConfig(CONFIG_UINT32_WORLD_CHAN_CD_USE_ACCOUNT_MAX_LEVEL,        "WorldChan.CooldownUseAccountLevel", 0);
     setConfig(CONFIG_UINT32_SAY_MIN_LEVEL,                              "SayMinLevel", 0);
     setConfig(CONFIG_UINT32_YELL_MIN_LEVEL,                             "YellMinLevel", 0);
     setConfig(CONFIG_UINT32_SAY_EMOTE_MIN_LEVEL,                        "SayEmoteMinLevel", 0);
@@ -1328,6 +1340,10 @@ void World::SetInitialWorldSettings()
 
     sLog.outString("Loading Quests Greetings...");          // must be loaded after creature_template
     sObjectMgr.LoadQuestGreetings();
+    sLog.outString();
+
+    sLog.outString("Loading Trainer Greetings...");
+    sObjectMgr.LoadTrainerGreetings();
     sLog.outString();
 
     sLog.outString("Loading Game Event Data...");           // must be after sPoolMgr.LoadFromDB and quests to properly load pool events and quests for events, but before area trigger teleports
@@ -2267,7 +2283,7 @@ BanReturn World::BanAccount(BanMode mode, std::string nameOrIP, uint32 duration_
 }
 
 /// Remove a ban from an account or IP address
-bool World::RemoveBanAccount(BanMode mode, std::string nameOrIP)
+bool World::RemoveBanAccount(BanMode mode, const std::string& source, const std::string& message, std::string nameOrIP)
 {
     if (mode == BAN_IP)
     {
@@ -2288,6 +2304,7 @@ bool World::RemoveBanAccount(BanMode mode, std::string nameOrIP)
 
         //NO SQL injection as account is uint32
         LoginDatabase.PExecute("UPDATE account_banned SET active = '0' WHERE id = '%u'", account);
+        WarnAccount(account, source, message, "UNBAN");
         sAccountMgr.UnbanAccount(account);
     }
     return true;

@@ -423,8 +423,7 @@ UpdateMask Player::updateVisualBits;
 Player::Player(WorldSession *session) : Unit(),
     m_mover(this), m_camera(this), m_reputationMgr(this),
     m_enableInstanceSwitch(true), m_currentTicketCounter(0),
-    m_honorMgr(this), m_bNextRelocationsIgnored(0),
-    m_pendingInstanceSwitch(false)
+    m_honorMgr(this), m_bNextRelocationsIgnored(0)
 {
     m_objectType |= TYPEMASK_PLAYER;
     m_objectTypeId = TYPEID_PLAYER;
@@ -518,7 +517,7 @@ Player::Player(WorldSession *session) : Unit(),
     m_deathTimer = 0;
     m_deathExpireTime = 0;
 
-    m_swingErrorMsg = 0;
+    m_swingErrorMsg = ATTACK_RESULT_OK;
 
     for (int j = 0; j < PLAYER_MAX_BATTLEGROUND_QUEUES; ++j)
     {
@@ -1172,20 +1171,13 @@ void Player::SetDrunkValue(uint16 newDrunkenValue, uint32 itemId)
         m_detectInvisibilityMask &= ~(1 << 6);
 }
 
-// Used to update attacker creatures (including pets' attackers) combat status when a player switches map
-struct UpdateAttackersCombatHelper
+AutoAttackCheckResult Player::CanAutoAttackTarget(Unit const* pVictim) const
 {
-    explicit UpdateAttackersCombatHelper(Player* _player) : player(_player) {}
-    void operator()(Unit* unit) const
-    {
-        Unit::AttackerSet const attackers = unit->getAttackers();
-        for (Unit::AttackerSet::const_iterator itr = attackers.begin(); itr != attackers.end(); ++itr)
-            if (Creature* creature = (*itr)->ToCreature())
-                if (creature->getVictim() == unit)
-                    creature->SelectHostileTarget();
-    }
-    Player* player;
-};
+    if (!IsValidAttackTarget(pVictim))
+        return ATTACK_RESULT_FRIENDLY_TARGET;
+
+    return Unit::CanAutoAttackTarget(pVictim);
+}
 
 void Player::Update(uint32 update_diff, uint32 p_time)
 {
@@ -1395,14 +1387,7 @@ void Player::Update(uint32 update_diff, uint32 p_time)
         uint16 newInstanceId = sMapMgr.GetContinentInstanceId(GetMap()->GetId(), GetPositionX(), GetPositionY(), &transition);
         if (newInstanceId != GetInstanceId())
             if (!transition || !isInCombat())
-            {
                 sMapMgr.ScheduleInstanceSwitch(this, newInstanceId);
-
-                // Update attacker creatures combat status if needed
-                UpdateAttackersCombatHelper helper(this);
-                helper(this);
-                CallForAllControlledUnits(helper, CONTROLLED_PET | CONTROLLED_TOTEMS | CONTROLLED_GUARDIANS | CONTROLLED_CHARM);
-            }
     }
     if (IsInWorld())
     {
@@ -1642,7 +1627,7 @@ void Player::AutoReSummonPet()
     }
 
     // 3. Execute the pet summon spell effect
-    EffectSummonPet(spell, entry);
+    EffectSummonPet(spell, entry, getLevel());
 
     // 4. We may want to resurrect the pet
     Pet* pet = GetPet();
@@ -1860,11 +1845,12 @@ bool Player::SwitchInstance(uint32 newInstanceId)
 
     //remove auras before removing from map...
     RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_CHANGE_MAP | AURA_INTERRUPT_FLAG_MOVE | AURA_INTERRUPT_FLAG_TURNING);
-    RemoveSpellsCausingAura(SPELL_AURA_MOD_CHARM);
-    RemoveSpellsCausingAura(SPELL_AURA_MOD_POSSESS);
-    RemoveSpellsCausingAura(SPELL_AURA_AOE_CHARM);
+    RemoveCharmAuras();
     DisableSpline();
     SetMover(this);
+
+    // Clear hostile refs so that we have no cross-map (and thread) references being maintained
+    getHostileRefManager().deleteReferences();
 
     // remove from old map now
     oldmap->Remove(this, false);
@@ -2016,11 +2002,6 @@ bool Player::TeleportTo(uint32 mapid, float x, float y, float z, float orientati
         ScheduledTeleportData *data = new ScheduledTeleportData(mapid, x, y, z, orientation, options, recover);
 
         sMapMgr.ScheduleFarTeleport(this, data);
-
-        // Update attacker creatures combat status if needed
-        UpdateAttackersCombatHelper helper(this);
-        helper(this);
-        CallForAllControlledUnits(helper, CONTROLLED_PET | CONTROLLED_TOTEMS | CONTROLLED_GUARDIANS | CONTROLLED_CHARM);
     }
     return true;
 }
@@ -2115,6 +2096,9 @@ bool Player::ExecuteTeleportFar(ScheduledTeleportData *data)
         DisableSpline();
         SetFallInformation(0, data->z);
         ScheduleDelayedOperation(DELAYED_CAST_HONORLESS_TARGET);
+
+        // Clear hostile refs so that we have no cross-map (and thread) references being maintained
+        getHostileRefManager().deleteReferences();
 
         // if the player is saved before worldport ack (at logout for example)
         // this will be used instead of the current location in SaveToDB
@@ -2257,6 +2241,8 @@ void Player::RemoveFromWorld()
     ///- The player should only be removed when logging out
     if (IsInWorld())
         GetCamera().ResetView();
+
+    SetEscortingGuid(ObjectGuid());
 
     Unit::RemoveFromWorld();
 }
@@ -2846,13 +2832,17 @@ void Player::GiveLevel(uint32 level)
     PlayerClassLevelInfo classInfo;
     sObjectMgr.GetPlayerClassLevelInfo(getClass(), level, &classInfo);
 
+    uint32 hp = uint32((int32(classInfo.basehealth) - int32(GetCreateHealth()))
+        + (int32(GetHealthBonusFromStamina(info.stats[STAT_STAMINA])) - int32(GetHealthBonusFromStamina(GetCreateStat(STAT_STAMINA)))));
+
+    uint32 mana = uint32((int32(classInfo.basemana) - int32(GetCreateMana()))
+        + (int32(GetManaBonusFromIntellect(info.stats[STAT_INTELLECT])) - int32(GetManaBonusFromIntellect(GetCreateStat(STAT_INTELLECT)))));
+
     // send levelup info to client
     WorldPacket data(SMSG_LEVELUP_INFO, (4 + 4 + MAX_POWERS * 4 + MAX_STATS * 4));
     data << uint32(level);
-    data << uint32((int32(classInfo.basehealth) - int32(GetCreateHealth()))
-        + ((int32(info.stats[STAT_STAMINA]) - GetCreateStat(STAT_STAMINA)) * 10));
-    // for(int i = 0; i < MAX_POWERS; ++i)                  // Powers loop (0-6)
-    data << uint32(int32(classInfo.basemana)   - int32(GetCreateMana()));
+    data << hp;
+    data << uint32(getPowerType() == POWER_MANA ? mana : 0);
     data << uint32(0);
     data << uint32(0);
     data << uint32(0);
@@ -10041,9 +10031,12 @@ InventoryResult Player::CanUseItem(Item *pItem, bool not_loading) const
             if (msg != EQUIP_ERR_OK)
                 return msg;
 
-            if (pItem->GetSkill() != 0)
+            if (uint32 skill = pItem->GetSkill())
             {
-                if (GetSkillValue(pItem->GetSkill()) == 0)
+                // Fist weapons use unarmed skill calculations, but we must query fist weapon skill presence to use this item
+                if (pProto->SubClass == ITEM_SUBCLASS_WEAPON_FIST)
+                    skill = SKILL_FIST_WEAPONS;
+                if (!GetSkillValue(skill))
                     return EQUIP_ERR_NO_REQUIRED_PROFICIENCY;
             }
 
@@ -10076,14 +10069,7 @@ InventoryResult Player::CanUseItem(ItemPrototype const *pProto, bool not_loading
         if (pProto->RequiredSpell != 0 && !HasSpell(pProto->RequiredSpell))
             return EQUIP_ERR_NO_REQUIRED_PROFICIENCY;
 
-
-        auto playerRank = m_honorMgr.GetHighestRank().rank;
-
-        if (sWorld.getConfig(CONFIG_BOOL_ACCURATE_PVP_EQUIP_REQUIREMENTS)
-            && sWorld.GetWowPatch() < WOW_PATCH_106)
-        {
-            playerRank = m_honorMgr.GetRank().rank;
-        }
+        auto playerRank = (sWorld.getConfig(CONFIG_BOOL_ACCURATE_PVP_EQUIP_REQUIREMENTS) && sWorld.GetWowPatch() < WOW_PATCH_106) ? m_honorMgr.GetRank().rank : m_honorMgr.GetHighestRank().rank;
 
         if (not_loading && playerRank < (uint8)pProto->RequiredHonorRank)
             return EQUIP_ERR_CANT_EQUIP_RANK;
@@ -14967,7 +14953,9 @@ bool Player::LoadFromDB(ObjectGuid guid, SqlQueryHolder *holder)
     sBattleGroundMgr.PlayerLoggedIn(this); // Add to BG queue if needed
     CreatePacketBroadcaster();
 
-    if (sWorld.GetWowPatch() >= WOW_PATCH_112)
+    // Note, if not using accurate mounts be sure to update all trainer spells in the
+    // database or players will be stuck with the old skill system
+    if (sWorld.GetWowPatch() >= WOW_PATCH_112 && sWorld.getConfig(CONFIG_BOOL_ACCURATE_MOUNTS))
         UpdateOldRidingSkillToNew(has_epic_mount);
 
     return true;
@@ -15032,13 +15020,21 @@ void Player::UpdateOldRidingSkillToNew(bool has_epic_mount)
         has_old_riding_skill = true;
     }
 
+    // Paladin and Warlock level 40 mounts
+    if (HasSpell(13819u) || HasSpell(5784u))
+        has_old_riding_skill = true;
+
+    // Paladin and Warlock level 60 mounts
+    if (HasSpell(23214u) || HasSpell(23161u))
+        has_epic_mount = true;
+
     if (!has_old_riding_skill)
         return;
     
     if (has_epic_mount)
-        learnSpell(33391, false); // Journeyman Riding
+        learnSpell(33391u, false); // Journeyman Riding
     else
-        learnSpell(33388, false); // Apprentice Riding
+        learnSpell(33388u, false); // Apprentice Riding
 }
 
 void Player::SendPacketsAtRelogin()
@@ -15161,7 +15157,7 @@ void Player::LoadAura(AuraSaveStruct& s, uint32 timediff)
         return;
     }
 
-    if (s.remaintime != -1 && !IsPositiveSpell(spellproto))
+    if (s.remaintime != -1 && HasRealTimeDuration(spellproto))
     {
         if (timediff > (INT_MAX / IN_MILLISECONDS))
             return;
@@ -16659,6 +16655,12 @@ void Player::SendAutoRepeatCancel()
     GetSession()->SendPacket(&data);
 }
 
+void Player::SendFeignDeathResisted()
+{
+    WorldPacket data(SMSG_FEIGN_DEATH_RESISTED, 0);
+    GetSession()->SendPacket(&data);
+}
+
 void Player::SendExplorationExperience(uint32 Area, uint32 Experience)
 {
     WorldPacket data(SMSG_EXPLORATION_EXPERIENCE, 8);
@@ -16667,8 +16669,17 @@ void Player::SendExplorationExperience(uint32 Area, uint32 Experience)
     GetSession()->SendPacket(&data);
 }
 
-void Player::SendResetFailedNotify(uint32 mapid)
+void Player::SendFactionAtWar(uint32 reputationId, bool apply)
 {
+    WorldPacket data(SMSG_SET_FACTION_ATWAR, 4 + 1);
+    data << uint32(reputationId);
+    data << uint8(apply ? FACTION_FLAG_AT_WAR : 0);
+    GetSession()->SendPacket(&data);
+}
+
+void Player::SendResetFailedNotify()
+{
+    ChatHandler(this).SendSysMessage(LANG_LEAVE_TO_RESET_INSTANCE);
 }
 
 /// Reset all solo instances and optionally send a message on success for each
@@ -17790,10 +17801,10 @@ bool Player::BuyItemFromVendor(ObjectGuid vendorGuid, uint32 item, uint8 count, 
         return false;
     }
 
-    auto playerRank = sWorld.getConfig(CONFIG_BOOL_ACCURATE_PVP_PURCHASE_REQUIREMENTS) ?
-        m_honorMgr.GetRank().rank: m_honorMgr.GetHighestRank().rank;
+    auto playerRank = (sWorld.GetWowPatch() < WOW_PATCH_107) && sWorld.getConfig(CONFIG_BOOL_ACCURATE_PVP_PURCHASE_REQUIREMENTS) ?
+        m_honorMgr.GetHighestRank().rank : m_honorMgr.GetRank().rank;
 
-    // not check level requiremnt for normal items (PvP related bonus items is another case)
+    // do not check level requirement for normal items (PvP related bonus items is another case)
     if (pProto->RequiredHonorRank && (playerRank < (uint8)pProto->RequiredHonorRank || getLevel() < pProto->RequiredLevel))
     {
         SendBuyError(BUY_ERR_RANK_REQUIRE, pCreature, item, 0);
@@ -20158,7 +20169,7 @@ bool Player::TeleportToHomebind(uint32 options, bool hearthCooldown)
         SpellEntry const *spellInfo = sSpellMgr.GetSpellEntry(8690);
         AddSpellAndCategoryCooldowns(spellInfo, 6948);
     }
-    return TeleportTo(m_homebindMapId, m_homebindX, m_homebindY, m_homebindZ, GetOrientation(), options); 
+    return TeleportTo(m_homebindMapId, m_homebindX, m_homebindY, m_homebindZ, GetOrientation(), (options | TELE_TO_FORCE_MAP_CHANGE));
 }
 
 Object* Player::GetObjectByTypeMask(ObjectGuid guid, TypeMask typemask)
@@ -20867,7 +20878,7 @@ void Player::LootMoney(int32 money, Loot* loot)
 void Player::RewardHonor(Unit* uVictim, uint32 groupSize)
 {
     // Honor System was added in 1.4.
-    if (sWorld.GetWowPatch() < WOW_PATCH_104)
+    if (sWorld.GetWowPatch() < WOW_PATCH_104 && sWorld.getConfig(CONFIG_BOOL_ACCURATE_PVP_TIMELINE))
         return;
 
     if (!uVictim)
@@ -20886,7 +20897,7 @@ void Player::RewardHonor(Unit* uVictim, uint32 groupSize)
                 return;
 
             // Dishonorable kills were added in 1.5.
-            if (sWorld.GetWowPatch() < WOW_PATCH_105)
+            if (sWorld.GetWowPatch() < WOW_PATCH_105 && sWorld.getConfig(CONFIG_BOOL_ACCURATE_PVP_TIMELINE))
                 return;
 
             m_honorMgr.Add(HonorMgr::DishonorableKillPoints(getLevel()), DISHONORABLE, cVictim);
@@ -20907,7 +20918,7 @@ void Player::RewardHonor(Unit* uVictim, uint32 groupSize)
 void Player::RewardHonorOnDeath()
 {
     // Honor System was added in 1.4.
-    if (sWorld.GetWowPatch() < WOW_PATCH_104)
+    if (sWorld.GetWowPatch() < WOW_PATCH_104 && sWorld.getConfig(CONFIG_BOOL_ACCURATE_PVP_TIMELINE))
         return;
 
     if (GetAura(2479, EFFECT_INDEX_0))             // Honorless Target

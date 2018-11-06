@@ -1004,13 +1004,12 @@ void Map::Update(uint32 t_diff)
 
 void Map::UpdateScriptedEvents()
 {
-    for (auto itr = m_mScriptedEvents.begin(); itr != m_mScriptedEvents.end(); ++itr)
+    for (auto itr = m_mScriptedEvents.begin(); itr != m_mScriptedEvents.end();)
     {
         if (itr->second.UpdateEvent())
-        {
-            itr = m_mScriptedEvents.erase(itr);
-            continue;
-        }
+            m_mScriptedEvents.erase(itr++);
+        else
+            ++itr;
     }
 }
 
@@ -2127,7 +2126,7 @@ bool DungeonMap::Reset(InstanceResetMethod method)
         {
             // notify the players to leave the instance so it can be reset
             for (MapRefManager::iterator itr = m_mapRefManager.begin(); itr != m_mapRefManager.end(); ++itr)
-                itr->getSource()->SendResetFailedNotify(GetId());
+                itr->getSource()->SendResetFailedNotify();
         }
         else
         {
@@ -3440,6 +3439,31 @@ void Map::PrintInfos(ChatHandler& handler)
     handler.PSendSysMessage("%u objects relocated [%u threads]", i_unitsRelocated.size(), _unitRelocationThreads);
     handler.PSendSysMessage("%u scripts scheduled", m_scriptSchedule.size());
     handler.PSendSysMessage("Vis:%.1f Act:%.1f", m_VisibleDistance, m_GridActivationDistance);
+}
+
+bool Map::ShouldUpdateMap(uint32 now, uint32 inactiveTimeLimit)
+{
+    auto update = true;
+
+    if (!HavePlayers() && inactiveTimeLimit)
+    {
+        if (WorldTimer::getMSTimeDiff(_lastPlayerLeftTime, now) > inactiveTimeLimit)
+            update = false;
+    }
+
+    // If we have corpses to be removed, we should force an update of the map.
+    // Otherwise players may die elsewhere and generate another corpse while
+    // this one still exists. If the server crashes before the map unloads,
+    // they'll have two active corpses. We can't immediately remove the corpse
+    // in AddCorpseToRemove because it can be called concurrently.
+    if (!update)
+    {
+        ACE_Guard<MapMutexType> guard(_corpseRemovalLock);
+        if (_corpseToRemove.size() > 0)
+            update = true;
+    }
+
+    return update;
 }
 
 /**

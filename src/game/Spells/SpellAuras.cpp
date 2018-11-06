@@ -1984,7 +1984,6 @@ void Aura::HandleAuraDummy(bool apply, bool Real)
                     return;
                 }
                 case 10848: // Shroud of Death
-                case 22650: // Ghost Visual
                 case 27978: // Shroud of Death
                     if (apply)
                         target->m_AuraFlags |= UNIT_AURAFLAG_ALIVE_INVISIBLE;
@@ -2895,8 +2894,8 @@ void Unit::ModPossess(Unit* target, bool apply, AuraRemoveMode m_removeMode)
     }
     else
     {
-        // On transfert la menace vers celui qui a CM
-        target->TransferAttackersThreatTo(caster);
+        // Clear threat generated when MC ends
+        target->RemoveAttackersThreat(caster);
 
         // spell is interrupted on channeled aura removal, don't need to interrupt here
         //caster->InterruptSpell(CURRENT_CHANNELED_SPELL);
@@ -3253,12 +3252,28 @@ void Aura::HandleFeignDeath(bool apply, bool Real)
     if (!Real)
         return;
 
+    bool success = true;
     Unit* pTarget = GetTarget();
-    // Toutes les personnes qui castent sur le casteur de FD doivent etre interrompues.
+    
     if (apply)
-        pTarget->InterruptSpellsCastedOnMe();
+    {
+        HostileReference* pReference = pTarget->getHostileRefManager().getFirst();
+        while (pReference)
+        {
+            if (Creature* refTarget = ToCreature(pReference->getSourceUnit()))
+            {
+                if (!refTarget->GetCharmerOrOwnerOrSelf()->IsPlayer() && refTarget->IsWithinDistInMap(pTarget, refTarget->GetAttackDistance(pTarget))
+                    && pTarget->MagicSpellHitResult(refTarget, GetHolder()->GetSpellProto(), nullptr) != SPELL_MISS_NONE)
+                {
+                    success = false;
+                    break;
+                }
+            }
+            pReference = pReference->next();
+        }
+    }
 
-    pTarget->SetFeignDeath(apply, GetCasterGuid(), GetId());
+    pTarget->SetFeignDeath(apply, GetCasterGuid(), success);
 }
 
 void Aura::HandleAuraModDisarm(bool apply, bool Real)
@@ -4091,7 +4106,9 @@ void Aura::HandlePeriodicDamage(bool apply, bool Real)
             }
             case SPELLFAMILY_ROGUE:
             {
-                // Rupture
+#if SUPPORTED_CLIENT_BUILD > CLIENT_BUILD_1_11_2
+                // World of Warcraft Client Patch 1.12.0 (2006-08-22)
+                // - Rupture: Rupture now increases in potency with greater attack power.
                 if (spellProto->IsFitToFamilyMask<CF_ROGUE_RUPTURE>())
                 {
                     // Dmg/tick = $AP*min(0.01*$cp, 0.03) [Like Rip: only the first three CP increase the contribution from AP]
@@ -4102,6 +4119,13 @@ void Aura::HandlePeriodicDamage(bool apply, bool Real)
                         m_modifier.m_amount += int32(caster->GetTotalAttackPowerValue(BASE_ATTACK) * cp / 100);
                     }
                 }
+#elif SUPPORTED_CLIENT_BUILD <= CLIENT_BUILD_1_11_2
+                // World of Warcraft Client Patch 1.12.0 (2006-08-22)
+                // - Garrote: The damage from this ability has been increased. In
+                //   addition, Garrote now increases in potency with greater attack power.
+                if (spellProto->IsFitToFamilyMask<CF_ROGUE_GARROTE>())
+                    return;
+#endif
                 break;
             }
             default:
@@ -4692,6 +4716,14 @@ void Aura::HandleModAttackSpeed(bool apply, bool /*Real*/)
     target->ApplyAttackTimePercentMod(BASE_ATTACK, float(m_modifier.m_amount), apply);
     target->ApplyAttackTimePercentMod(OFF_ATTACK, float(m_modifier.m_amount), apply);
     target->ApplyAttackTimePercentMod(RANGED_ATTACK, float(m_modifier.m_amount), apply);
+
+    // Seal of the Crusader damage reduction
+    // SoC increases attack speed but reduces damage to maintain the same DPS
+    if (GetSpellProto()->IsFitToFamily<SPELLFAMILY_PALADIN, CF_PALADIN_SEAL_OF_THE_CRUSADER>())
+    {
+        float reduction = (-100.0f * m_modifier.m_amount) / (m_modifier.m_amount + 100.0f);
+        target->HandleStatModifier(UNIT_MOD_DAMAGE_MAINHAND, TOTAL_PCT, reduction, apply);
+    }
 }
 
 void Aura::HandleModMeleeSpeedPct(bool apply, bool /*Real*/)
@@ -5920,7 +5952,7 @@ SpellAuraHolder::SpellAuraHolder(SpellEntry const* spellproto, Unit *target, Wor
     m_applyTime      = time(nullptr);
     m_isPassive      = IsPassiveSpell(GetId()) || spellproto->Attributes == 0x80;
     m_isDeathPersist = IsDeathPersistentSpell(spellproto);
-    m_isSingleTarget = IsSingleTargetSpell(spellproto);
+    m_isSingleTarget = HasSingleTargetAura(spellproto);
     m_procCharges    = spellproto->procCharges;
     m_isChanneled    = IsChanneledSpell(spellproto);
 

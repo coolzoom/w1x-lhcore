@@ -612,7 +612,8 @@ SpellSpecific GetSpellSpecific(uint32 spellId)
                 return SPELL_NEGATIVE_HASTE;
 
     // Movement speed reduction
-    if (IsSpellHaveSingleAura(spellInfo, SPELL_AURA_MOD_DECREASE_SPEED))
+    // Dazes are not affected
+    if (IsSpellHaveSingleAura(spellInfo, SPELL_AURA_MOD_DECREASE_SPEED) && !(spellInfo->AttributesEx & SPELL_ATTR_EX_UNK18))
         return SPELL_SNARE;
 
     return SPELL_NORMAL;
@@ -1016,82 +1017,6 @@ bool IsHealSpell(SpellEntry const *spellProto)
                 break;
             }
         }
-    }
-
-    return false;
-}
-
-bool IsSingleTargetSpell(SpellEntry const *spellInfo)
-{
-    // exceptions (have spellInfo->AttributesEx & (1<<18) but not single targeted)
-    switch (spellInfo->SpellFamilyName)
-    {
-        case SPELLFAMILY_GENERIC:
-            switch (spellInfo->Id)
-            {
-                case 4538:                                          // Extract Essence (group targets)
-                case 5106:                                          // Crystal Flash (group targets)
-                case 5530:                                          // Mace Stun Effect
-                case 5648:                                          // Stunning Blast, rank 1
-                case 5649:                                          // Stunning Blast, rank 2
-                case 5726:                                          // Stunning Blow, Rank 1
-                case 5727:                                          // Stunning Blow, Rank 2
-                case 6927:                                          // Shadowstalker Slash, Rank 1
-                case 8399:                                          // Sleep (group targets)
-                case 9159:                                          // Sleep (armor triggred affect)
-                case 9256:                                          // Deep Sleep (group targets)
-                case 13902:                                         // Fist of Ragnaros
-                case 16104:                                         // Crystallize (group targets)
-                case 17286:                                         // Crusader's Hammer (group targets)
-                case 20277:                                         // Fist of Ragnaros (group targets)
-                case 20669:                                         // Sleep (group targets)
-                case 20683:                                         // Highlord's Justice
-                case 24664:                                         // Sleep (group targets)
-                    return false;
-            }
-            break;
-        case SPELLFAMILY_HUNTER:
-            // Hunter's Mark
-            if (spellInfo->SpellVisual == 3239)
-                return true;
-            // Freezing Trap
-            else if (spellInfo->IsFitToFamilyMask<CF_HUNTER_FREEZING_TRAP_EFFECT>())
-                return false;
-            break;
-        case SPELLFAMILY_ROGUE:
-            // Cheap Shot
-            if (spellInfo->IsFitToFamilyMask<CF_ROGUE_CHEAP_SHOT>())
-                return false;
-            break;
-    } 
-
-    // cannot be cast on another target while not cooled down anyway
-    if (GetSpellDuration(spellInfo) < int32(GetSpellRecoveryTime(spellInfo)))
-        return false;
-
-    // all other single target spells have if it has AttributesEx
-    if (spellInfo->AttributesEx & (1 << 18))
-        return true;
-
-    // other single target
-    //Fear
-    if ((spellInfo->SpellIconID == 98 && spellInfo->SpellFamilyName == SPELLFAMILY_WARLOCK)
-      //Banish
-      || (spellInfo->SpellIconID == 96 && spellInfo->SpellVisual == 1305))
-             return true;
-
-    // Entangling roots -> Can still have on several targets using [Nature's Grasp] (fixed in patch 2.2)
-    if (spellInfo->IsFitToFamily<SPELLFAMILY_DRUID, CF_DRUID_ENTANGLING_ROOTS>() && spellInfo->Id != 19975)
-        return true;
-
-    // TODO - need found Judgements rule
-    switch (GetSpellSpecific(spellInfo->Id))
-    {
-        case SPELL_JUDGEMENT:
-        case SPELL_MAGE_POLYMORPH:
-            return true;
-        default:
-            break;
     }
 
     return false;
@@ -3782,26 +3707,20 @@ void SpellMgr::LoadSpellAreas()
 
 SpellCastResult SpellMgr::GetSpellAllowedInLocationError(SpellEntry const *spellInfo, Unit const* caster, Player const* player)
 {
-    // bg spell checks
-
     // Spell casted only on battleground
     if ((spellInfo->AttributesEx3 & SPELL_ATTR_EX3_BATTLEGROUND))
         if (!player || !player->InBattleGround())
             return SPELL_FAILED_ONLY_BATTLEGROUNDS;
 
-    uint32 mapId = 0;
-    if (caster)
-        mapId = caster->GetMapId();
-    else if (player)
-        mapId = player->GetMapId();
+    uint32 mapId = caster ? caster->GetMapId() : (player ? player->GetMapId() : 0);
 
     switch (spellInfo->Id)
     {
-                            // Alterac Valley
-        case 22564:                                         // recall
-        case 22563:                                         // recall
-        case 23538:                                         // Battle Standard
-        case 23539:
+        // Alterac Valley
+        case 22564:                                         // Recall (Alliance)
+        case 22563:                                         // Recall (Horde)
+        case 23538:                                         // Battle Standard (Horde)
+        case 23539:                                         // Battle Standard (Alliance)
         {
             if (!player)
                 return SPELL_FAILED_REQUIRES_AREA;
@@ -3811,6 +3730,7 @@ SpellCastResult SpellMgr::GetSpellAllowedInLocationError(SpellEntry const *spell
             return player->GetMapId() == 30 && bg
                    && bg->GetStatus() != STATUS_WAIT_JOIN ? SPELL_CAST_OK : SPELL_FAILED_REQUIRES_AREA;
         }
+        // Warsong Gulch
         case 23333:                                         // Warsong Flag
         case 23335:                                         // Silverwing Flag
             return player && player->GetMapId() == 489 && player->InBattleGround() ? SPELL_CAST_OK : SPELL_FAILED_REQUIRES_AREA;
@@ -3845,6 +3765,36 @@ SpellCastResult SpellMgr::GetSpellAllowedInLocationError(SpellEntry const *spell
         }
     }
     return SPELL_CAST_OK;
+}
+
+uint32 SpellMgr::GetRequiredAreaForSpell(uint32 spellId)
+{
+    SpellAreaMapBounds saBounds = GetSpellAreaMapBounds(spellId);
+    if (saBounds.first != saBounds.second)
+    {
+        for (SpellAreaMap::const_iterator itr = saBounds.first; itr != saBounds.second; ++itr)
+        {
+            if (itr->second.areaId)
+                return itr->second.areaId;
+        }
+    }
+
+    // Not defined in database.
+    switch (spellId)
+    {
+        // Alterac Valley
+        case 22564: // Recall (Alliance)
+        case 22563: // Recall (Horde)
+        case 23538: // Battle Standard (Horde)
+        case 23539: // Battle Standard (Alliance)
+            return 2597;
+        // Warsong Gulch
+        case 23333: // Warsong Flag
+        case 23335: // Silverwing Flag
+            return 3277;
+    }
+
+    return 0;
 }
 
 SpellCastResult SpellMgr::GetSpellAllowedInLocationError(SpellEntry const *spellInfo, uint32 zone_id, uint32 area_id, Player const* player)
@@ -4536,20 +4486,21 @@ void SpellMgr::LoadSpells()
         spell->ManaCostPercentage = fields[156].GetUInt32();
         spell->StartRecoveryCategory = fields[157].GetUInt32();
         spell->StartRecoveryTime = fields[158].GetUInt32();
-        spell->MaxTargetLevel = fields[159].GetUInt32();
-        spell->SpellFamilyName = fields[160].GetUInt32();
-        spell->SpellFamilyFlags = fields[161].GetUInt64();
-        spell->MaxAffectedTargets = fields[162].GetUInt32();
-        spell->DmgClass = fields[163].GetUInt32();
-        spell->PreventionType = fields[164].GetUInt32();
-        //spell->StanceBarOrder = fields[165].GetInt32();
-        spell->DmgMultiplier[0] = fields[166].GetFloat();
-        spell->DmgMultiplier[1] = fields[167].GetFloat();
-        spell->DmgMultiplier[2] = fields[168].GetFloat();
-        //spell->MinFactionId = fields[169].GetUInt32();
-        //spell->MinReputation = fields[170].GetUInt32();
-        //spell->RequiredAuraVision = fields[171].GetUInt32();
-        spell->Custom = fields[172].GetUInt32();
+        spell->MinTargetLevel = fields[159].GetUInt32();
+        spell->MaxTargetLevel = fields[160].GetUInt32();
+        spell->SpellFamilyName = fields[161].GetUInt32();
+        spell->SpellFamilyFlags = fields[162].GetUInt64();
+        spell->MaxAffectedTargets = fields[163].GetUInt32();
+        spell->DmgClass = fields[164].GetUInt32();
+        spell->PreventionType = fields[165].GetUInt32();
+        //spell->StanceBarOrder = fields[166].GetInt32();
+        spell->DmgMultiplier[0] = fields[167].GetFloat();
+        spell->DmgMultiplier[1] = fields[168].GetFloat();
+        spell->DmgMultiplier[2] = fields[169].GetFloat();
+        //spell->MinFactionId = fields[170].GetUInt32();
+        //spell->MinReputation = fields[171].GetUInt32();
+        //spell->RequiredAuraVision = fields[172].GetUInt32();
+        spell->Custom = fields[173].GetUInt32();
 
         spell->InitCachedValues();
         mSpellEntryMap[spellId] = std::move(spell);

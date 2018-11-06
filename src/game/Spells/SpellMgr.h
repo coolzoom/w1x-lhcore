@@ -56,6 +56,7 @@ enum SpellAttributeCustom
     SPELL_CUSTOM_IGNORE_ARMOR               = 0x020,
     SPELL_CUSTOM_FROM_BEHIND                = 0x040,     // For spells that require the caster to be behind the target
     SPELL_CUSTOM_FROM_FRONT                 = 0x080,     // For spells that require the target to be in front of the caster
+    SPELL_CUSTOM_SINGLE_TARGET_AURA         = 0x100,     // Aura applied by spell can only be on 1 target at a time
 };
 
 // only used in code
@@ -254,6 +255,11 @@ inline bool IsElementalShield(SpellEntry const *spellInfo)
     return spellInfo->IsFitToFamilyMask<CF_SHAMAN_LIGHTNING_SHIELD>() || spellInfo->Id == 23552;
 }
 
+inline bool IsFromBehindOnlySpell(SpellEntry const *spellInfo)
+{
+    return ((spellInfo->AttributesEx2 == 0x100000 && (spellInfo->AttributesEx & 0x200) == 0x200) || (spellInfo->Custom & SPELL_CUSTOM_FROM_BEHIND));
+}
+
 int32 CompareAuraRanks(uint32 spellId_1, uint32 spellId_2);
 bool CompareSpellSpecificAuras(SpellEntry const* spellInfo_1, SpellEntry const* spellInfo_2);
 
@@ -304,7 +310,11 @@ bool IsHealSpell(SpellEntry const *spellProto);
 bool IsExplicitPositiveTarget(uint32 targetA);
 bool IsExplicitNegativeTarget(uint32 targetA);
 
-bool IsSingleTargetSpell(SpellEntry const *spellInfo);
+inline bool HasSingleTargetAura(SpellEntry const *spellInfo)
+{
+    return spellInfo->Custom & SPELL_CUSTOM_SINGLE_TARGET_AURA;
+}
+
 bool IsSingleTargetSpells(SpellEntry const *spellInfo1, SpellEntry const *spellInfo2);
 
 inline bool IsCasterSourceTarget(uint32 target)
@@ -533,6 +543,11 @@ inline bool NeedsComboPoints(SpellEntry const* spellInfo)
 inline bool IsTotemSummonSpell(SpellEntry const* spellInfo)
 {
     return spellInfo->Effect[0] >= SPELL_EFFECT_SUMMON_TOTEM_SLOT1 && spellInfo->Effect[0] <= SPELL_EFFECT_SUMMON_TOTEM_SLOT4;
+}
+
+inline bool HasRealTimeDuration(SpellEntry const* spellInfo)
+{
+    return spellInfo->AttributesEx4 & SPELL_ATTR_EX4_REAL_TIME_DURATION;
 }
 
 // Spell effects require a specific power type on the target
@@ -1292,11 +1307,12 @@ class SpellMgr
             if(itr != mSpellPetAuraMap.end())
                 return &itr->second;
             else
-                return NULL;
+                return nullptr;
         }
 
-        SpellCastResult GetSpellAllowedInLocationError(SpellEntry const *spellInfo, Unit const* caster, Player const* player = NULL);
-        SpellCastResult GetSpellAllowedInLocationError(SpellEntry const *spellInfo, uint32 zone_id, uint32 area_id, Player const* player = NULL);
+        SpellCastResult GetSpellAllowedInLocationError(SpellEntry const *spellInfo, Unit const* caster, Player const* player = nullptr);
+        SpellCastResult GetSpellAllowedInLocationError(SpellEntry const *spellInfo, uint32 zone_id, uint32 area_id, Player const* player = nullptr);
+        uint32 GetRequiredAreaForSpell(uint32 spellId);
 
         SpellAreaMapBounds GetSpellAreaMapBounds(uint32 spell_id) const
         {

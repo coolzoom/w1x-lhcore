@@ -36,9 +36,7 @@ void AddSC_npc_king_gordok();
 void AddSC_areatrigger_scripts();
 void AddSC_dragons_of_nightmare();
 void AddSC_boss_lord_kazzak();
-void AddSC_generic_creature();
 void AddSC_go_scripts();
-void AddSC_guards();
 void AddSC_npc_professions();
 void AddSC_npcs_special();
 void AddSC_Totems();
@@ -145,7 +143,6 @@ void AddSC_boss_vectus();
 //void AddSC_boss_lordblackwood();
 void AddSC_scholo_trash();
 void AddSC_instance_scholomance();
-void AddSC_shadowfang_keep();                        //shadowfang_keep
 void AddSC_instance_shadowfang_keep();
 void AddSC_boss_magistrate_barthilas();              //stratholme
 void AddSC_boss_maleki_the_pallid();
@@ -307,9 +304,7 @@ void AddScripts()
     AddSC_areatrigger_scripts();
     AddSC_dragons_of_nightmare();
     AddSC_boss_lord_kazzak();
-    AddSC_generic_creature();
     AddSC_go_scripts();
-    AddSC_guards();
     AddSC_npc_professions();
     AddSC_npcs_special();
     AddSC_Totems();
@@ -416,7 +411,6 @@ void AddScripts()
     //AddSC_boss_lordblackwood();
     AddSC_scholo_trash();
     AddSC_instance_scholomance();
-    AddSC_shadowfang_keep();                                //shadowfang_keep
     AddSC_instance_shadowfang_keep();
     AddSC_boss_magistrate_barthilas();                      //stratholme
     AddSC_boss_maleki_the_pallid();

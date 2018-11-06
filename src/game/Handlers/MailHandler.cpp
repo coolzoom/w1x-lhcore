@@ -262,6 +262,13 @@ void WorldSession::HandleSendMailCallback(WorldSession::AsyncMailSendRequest* re
             return;
         }
 
+        // prevent sending item from bank slot
+        if (_player->IsBankPos(item->GetPos())) 
+        {
+            pl->SendMailResult(0, MAIL_SEND, MAIL_ERR_MAIL_ATTACHMENT_INVALID);
+            return;
+        }
+
         if (!item->CanBeTraded())
         {
             pl->SendMailResult(0, MAIL_SEND, MAIL_ERR_MAIL_ATTACHMENT_INVALID);
@@ -551,6 +558,13 @@ void WorldSession::HandleMailTakeItem(WorldPacket & recv_data)
 
     Mail* m = pl->GetMail(mailId);
     if (!m || m->state == MAIL_STATE_DELETED || m->deliver_time > time(NULL))
+    {
+        pl->SendMailResult(mailId, MAIL_ITEM_TAKEN, MAIL_ERR_INTERNAL_ERROR);
+        return;
+    }
+
+    // Prevent spoofed packet accessing mail that doesn't actually have items
+    if (!m->HasItems() || m->items.size() == 0)
     {
         pl->SendMailResult(mailId, MAIL_ITEM_TAKEN, MAIL_ERR_INTERNAL_ERROR);
         return;

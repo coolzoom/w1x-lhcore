@@ -1257,9 +1257,9 @@ void ObjectMgr::CheckCreatureTemplates()
 
         if (cInfo->equipmentId > 0)                         // 0 no equipment
         {
-            if (!GetEquipmentInfo(cInfo->equipmentId) && !GetEquipmentInfoRaw(cInfo->equipmentId))
+            if (!GetEquipmentInfo(cInfo->equipmentId))
             {
-                sLog.outErrorDb("Table `creature_template` have creature (Entry: %u) with equipment_id %u not found in table `creature_equip_template` or `creature_equip_template_raw`, set to no equipment.", cInfo->Entry, cInfo->equipmentId);
+                sLog.outErrorDb("Table `creature_template` have creature (Entry: %u) with equipment_id %u not found in table `creature_equip_template`, set to no equipment.", cInfo->Entry, cInfo->equipmentId);
                 sLog.out(LOG_DBERRFIX, "UPDATE creature_template SET `equipment_id`=0 WHERE entry=%u;", cInfo->Entry);
                 const_cast<CreatureInfo*>(cInfo)->equipmentId = 0;
             }
@@ -1402,11 +1402,6 @@ EquipmentInfo const* ObjectMgr::GetEquipmentInfo(uint32 entry)
     return sEquipmentStorage.LookupEntry<EquipmentInfo>(entry);
 }
 
-EquipmentInfoRaw const* ObjectMgr::GetEquipmentInfoRaw(uint32 entry)
-{
-    return sEquipmentStorageRaw.LookupEntry<EquipmentInfoRaw>(entry);
-}
-
 void ObjectMgr::LoadEquipmentTemplates()
 {
     sEquipmentStorage.LoadProgressive(sWorld.GetWowPatch(), true);
@@ -1449,15 +1444,6 @@ void ObjectMgr::LoadEquipmentTemplates()
     }
 
     sLog.outString(">> Loaded %u equipment template", sEquipmentStorage.GetRecordCount());
-    sLog.outString();
-
-    sEquipmentStorageRaw.LoadProgressive(sWorld.GetWowPatch(), false);
-    for (uint32 i = 1; i < sEquipmentStorageRaw.GetMaxEntry(); ++i)
-        if (sEquipmentStorageRaw.LookupEntry<EquipmentInfoRaw>(i))
-            if (sEquipmentStorage.LookupEntry<EquipmentInfo>(i))
-                sLog.outErrorDb("Table 'creature_equip_template_raw` have redundant data for ID %u ('creature_equip_template` already have data)", i);
-
-    sLog.outString(">> Loaded %u equipment template (deprecated format)", sEquipmentStorageRaw.GetRecordCount());
     sLog.outString();
 }
 
@@ -1863,9 +1849,9 @@ void ObjectMgr::LoadCreatures(bool reload)
 
         if (data.equipmentId > 0)                           // -1 no equipment, 0 use default
         {
-            if (!GetEquipmentInfo(data.equipmentId) && !GetEquipmentInfoRaw(data.equipmentId))
+            if (!GetEquipmentInfo(data.equipmentId))
             {
-                sLog.outErrorDb("Table `creature` have creature (Entry: %u) with equipment_id %u not found in table `creature_equip_template` or `creature_equip_template_raw`, set to no equipment.", data.id, data.equipmentId);
+                sLog.outErrorDb("Table `creature` have creature (Entry: %u) with equipment_id %u not found in table `creature_equip_template`, set to no equipment.", data.id, data.equipmentId);
                 data.equipmentId = -1;
             }
         }
@@ -6927,7 +6913,7 @@ void ObjectMgr::LoadQuestRelationsHelper(QuestRelationsMap& map, char const* tab
 
     uint32 count = 0;
 
-    QueryResult *result = WorldDatabase.PQuery("SELECT id,quest FROM %s t1 WHERE patch=(SELECT max(patch) FROM %s t2 WHERE t1.id=t2.id && t1.quest=t2.quest && patch <= %u)", table, table, sWorld.GetWowPatch());
+    QueryResult *result = WorldDatabase.PQuery("SELECT id,quest FROM %s WHERE %u BETWEEN patch_min AND patch_max", table, sWorld.GetWowPatch());
 
     if (!result)
     {
@@ -7927,6 +7913,67 @@ bool ObjectMgr::LoadQuestGreetings()
     return true;
 }
 
+bool ObjectMgr::LoadTrainerGreetings()
+{
+    mTrainerGreetingLocaleMap.clear();
+
+    QueryResult *result = WorldDatabase.Query("SELECT entry,content_default,content_loc1,content_loc2,content_loc3,content_loc4,content_loc5,content_loc6,content_loc7,content_loc8 FROM npc_trainer_greeting");
+
+    if (!result)
+    {
+        sLog.outString(">> Loaded 0 npc trainer greetings. DB table `npc_trainer_greeting` is empty.");
+        return false;
+    }
+
+    uint32 count = 0;
+
+    do
+    {
+        Field *fields = result->Fetch();
+        uint32 entry = fields[0].GetUInt32();
+
+        if (!ObjectMgr::GetCreatureTemplate(entry))
+        {
+            if (!IsExistingCreatureId(entry))
+                sLog.outErrorDb("Table `npc_trainer_greeting` have entry for nonexistent creature template (Entry: %u), ignore", entry);
+            continue;
+        }
+
+        TrainerGreetingLocale& data = mTrainerGreetingLocaleMap[entry];
+
+        data.Content.resize(1);
+        ++count;
+
+        // 0 -> default, idx in to idx+1
+        data.Content[0] = fields[1].GetCppString();
+
+        for (int i = 1; i < MAX_LOCALE; ++i)
+        {
+            std::string str = fields[i + 1].GetCppString();
+            if (!str.empty())
+            {
+                int idx = GetOrNewIndexForLocale(LocaleConstant(i));
+                if (idx >= 0)
+                {
+                    // 0 -> default, idx in to idx+1
+                    if ((int32)data.Content.size() <= idx + 1)
+                        data.Content.resize(idx + 2);
+
+                    data.Content[idx + 1] = str;
+                }
+            }
+        }
+
+    } while (result->NextRow());
+
+    delete result;
+
+    sLog.outString();
+    sLog.outString(">> Loaded %u trainer greetings.", count);
+
+    return true;
+}
+
 void ObjectMgr::LoadFishingBaseSkillLevel()
 {
     mFishingBaseForArea.clear();                            // for reload case
@@ -8319,7 +8366,7 @@ void ObjectMgr::LoadVendors(char const* tableName, bool isTemplates)
 
     std::set<uint32> skip_vendors;
 
-    QueryResult *result = WorldDatabase.PQuery("SELECT entry, item, maxcount, incrtime FROM %s WHERE (item NOT IN (SELECT entry FROM forbidden_items WHERE (AfterOrBefore = 0 && patch <= %u) || (AfterOrBefore = 1 && patch >= %u)))", tableName, sWorld.GetWowPatch(), sWorld.GetWowPatch());
+    QueryResult *result = WorldDatabase.PQuery("SELECT entry, item, maxcount, incrtime, itemflags FROM %s WHERE (item NOT IN (SELECT entry FROM forbidden_items WHERE (AfterOrBefore = 0 && patch <= %u) || (AfterOrBefore = 1 && patch >= %u)))", tableName, sWorld.GetWowPatch(), sWorld.GetWowPatch());
     if (!result)
     {
         BarGoLink bar(1);
@@ -8343,13 +8390,14 @@ void ObjectMgr::LoadVendors(char const* tableName, bool isTemplates)
         uint32 item_id      = fields[1].GetUInt32();
         uint32 maxcount     = fields[2].GetUInt32();
         uint32 incrtime     = fields[3].GetUInt32();
+        uint32 itemflags    = fields[4].GetUInt32();
 
         if (!IsVendorItemValid(isTemplates, tableName, entry, item_id, maxcount, incrtime, NULL, &skip_vendors))
             continue;
 
         VendorItemData& vList = vendorList[entry];
 
-        vList.AddItem(item_id, maxcount, incrtime);
+        vList.AddItem(item_id, maxcount, incrtime, itemflags);
         ++count;
 
     }
@@ -8728,12 +8776,12 @@ void ObjectMgr::LoadGossipMenuItems()
     sLog.outString(">> Loaded %u gossip_menu_option entries", count);
 }
 
-void ObjectMgr::AddVendorItem(uint32 entry, uint32 item, uint32 maxcount, uint32 incrtime)
+void ObjectMgr::AddVendorItem(uint32 entry, uint32 item, uint32 maxcount, uint32 incrtime, uint32 itemflags)
 {
     VendorItemData& vList = m_mCacheVendorItemMap[entry];
-    vList.AddItem(item, maxcount, incrtime);
+    vList.AddItem(item, maxcount, incrtime, itemflags);
 
-    WorldDatabase.PExecuteLog("INSERT INTO npc_vendor (entry,item,maxcount,incrtime) VALUES('%u','%u','%u','%u')", entry, item, maxcount, incrtime);
+    WorldDatabase.PExecuteLog("INSERT INTO npc_vendor (entry,item,maxcount,incrtime,itemflags) VALUES('%u','%u','%u','%u','%u')", entry, item, maxcount, incrtime, itemflags);
 }
 
 bool ObjectMgr::RemoveVendorItem(uint32 entry, uint32 item)

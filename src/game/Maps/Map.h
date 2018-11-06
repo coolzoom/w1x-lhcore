@@ -608,6 +608,8 @@ class MANGOS_DLL_SPEC Map : public GridRefManager<NGridType>, public MaNGOS::Obj
         void AddCorpseToRemove(Corpse* corpse, ObjectGuid looter_guid);
         GameObject* SummonGameObject(uint32 entry, float x, float y, float z, float ang, float rotation0, float rotation1, float rotation2, float rotation3, uint32 respawnTime, uint32 worldMask);
 
+        bool ShouldUpdateMap(uint32 now, uint32 inactiveTimeLimit);
+
     private:
         void LoadMapAndVMap(int gx, int gy);
 
@@ -834,6 +836,8 @@ class MANGOS_DLL_SPEC Map : public GridRefManager<NGridType>, public MaNGOS::Obj
         bool ScriptCommand_RespawnCreature(const ScriptInfo& script, WorldObject* source, WorldObject* target);
         bool ScriptCommand_AssistUnit(const ScriptInfo& script, WorldObject* source, WorldObject* target);
         bool ScriptCommand_CombatStop(const ScriptInfo& script, WorldObject* source, WorldObject* target);
+        bool ScriptCommand_AddAura(const ScriptInfo& script, WorldObject* source, WorldObject* target);
+        bool ScriptCommand_AddThreat(const ScriptInfo& script, WorldObject* source, WorldObject* target);
 
         // Add any new script command functions to the array.
         const ScriptCommandFunction m_ScriptCommands[SCRIPT_COMMAND_MAX] =
@@ -912,6 +916,8 @@ class MANGOS_DLL_SPEC Map : public GridRefManager<NGridType>, public MaNGOS::Obj
             &Map::ScriptCommand_RespawnCreature,        // 71
             &Map::ScriptCommand_AssistUnit,             // 72
             &Map::ScriptCommand_CombatStop,             // 73
+            &Map::ScriptCommand_AddAura,                // 74
+            &Map::ScriptCommand_AddThreat,              // 75
         };
 
     public:
