@@ -1815,11 +1815,12 @@ bool Player::SwitchInstance(uint32 newInstanceId)
 
     //remove auras before removing from map...
     RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_CHANGE_MAP | AURA_INTERRUPT_FLAG_MOVE | AURA_INTERRUPT_FLAG_TURNING);
-    RemoveSpellsCausingAura(SPELL_AURA_MOD_CHARM);
-    RemoveSpellsCausingAura(SPELL_AURA_MOD_POSSESS);
-    RemoveSpellsCausingAura(SPELL_AURA_AOE_CHARM);
+    RemoveCharmAuras();
     DisableSpline();
     SetMover(this);
+
+    // Clear hostile refs so that we have no cross-map (and thread) references being maintained
+    getHostileRefManager().deleteReferences();
 
     // remove from old map now
     oldmap->Remove(this, false);
@@ -2066,6 +2067,9 @@ bool Player::ExecuteTeleportFar(ScheduledTeleportData *data)
         SetFallInformation(0, data->z);
         ScheduleDelayedOperation(DELAYED_CAST_HONORLESS_TARGET);
 
+        // Clear hostile refs so that we have no cross-map (and thread) references being maintained
+        getHostileRefManager().deleteReferences();
+
         // if the player is saved before worldport ack (at logout for example)
         // this will be used instead of the current location in SaveToDB
 
@@ -2207,6 +2211,8 @@ void Player::RemoveFromWorld()
     ///- The player should only be removed when logging out
     if (IsInWorld())
         GetCamera().ResetView();
+
+    SetEscortingGuid(ObjectGuid());
 
     Unit::RemoveFromWorld();
 }
@@ -2792,13 +2798,17 @@ void Player::GiveLevel(uint32 level)
     PlayerClassLevelInfo classInfo;
     sObjectMgr.GetPlayerClassLevelInfo(getClass(), level, &classInfo);
 
+    uint32 hp = uint32((int32(classInfo.basehealth) - int32(GetCreateHealth()))
+        + (int32(GetHealthBonusFromStamina(info.stats[STAT_STAMINA])) - int32(GetHealthBonusFromStamina(GetCreateStat(STAT_STAMINA)))));
+
+    uint32 mana = uint32((int32(classInfo.basemana) - int32(GetCreateMana()))
+        + (int32(GetManaBonusFromIntellect(info.stats[STAT_INTELLECT])) - int32(GetManaBonusFromIntellect(GetCreateStat(STAT_INTELLECT)))));
+
     // send levelup info to client
     WorldPacket data(SMSG_LEVELUP_INFO, (4 + 4 + MAX_POWERS * 4 + MAX_STATS * 4));
     data << uint32(level);
-    data << uint32((int32(classInfo.basehealth) - int32(GetCreateHealth()))
-        + ((int32(info.stats[STAT_STAMINA]) - GetCreateStat(STAT_STAMINA)) * 10));
-    // for(int i = 0; i < MAX_POWERS; ++i)                  // Powers loop (0-6)
-    data << uint32(int32(classInfo.basemana)   - int32(GetCreateMana()));
+    data << hp;
+    data << uint32(getPowerType() == POWER_MANA ? mana : 0);
     data << uint32(0);
     data << uint32(0);
     data << uint32(0);
@@ -4436,6 +4446,16 @@ void Player::DeleteOldCharacters(uint32 keepDays)
         while (resultChars->NextRow());
         delete resultChars;
     }
+}
+
+void Player::SetFly(bool enable)
+{
+    if (enable)
+        m_movementInfo.moveFlags = (MOVEFLAG_LEVITATING | MOVEFLAG_SWIMMING | MOVEFLAG_CAN_FLY | MOVEFLAG_FLYING);
+    else
+        m_movementInfo.moveFlags = (MOVEFLAG_NONE);
+
+    SendHeartBeat(true);
 }
 
 /* Preconditions:
@@ -6444,13 +6464,8 @@ void Player::UpdateZone(uint32 newZone, uint32 newArea)
 
         if (sWorld.getConfig(CONFIG_BOOL_WEATHER))
         {
-            if (Weather *wth = sWorld.FindWeather(zoneEntry->Id))
-                wth->SendWeatherUpdateToPlayer(this);
-            else if (!sWorld.AddWeather(zoneEntry->Id))
-            {
-                // send fine weather packet to remove old zone's weather
-                Weather::SendFineWeatherUpdateToPlayer(this);
-            }
+            Weather* wth = GetMap()->GetWeatherSystem()->FindOrCreateWeather(newZone);
+            wth->SendWeatherUpdateToPlayer(this);
         }
     }
 
@@ -9929,9 +9944,12 @@ InventoryResult Player::CanUseItem(Item *pItem, bool not_loading) const
             if (msg != EQUIP_ERR_OK)
                 return msg;
 
-            if (pItem->GetSkill() != 0)
+            if (uint32 skill = pItem->GetSkill())
             {
-                if (GetSkillValue(pItem->GetSkill()) == 0)
+                // Fist weapons use unarmed skill calculations, but we must query fist weapon skill presence to use this item
+                if (pProto->SubClass == ITEM_SUBCLASS_WEAPON_FIST)
+                    skill = SKILL_FIST_WEAPONS;
+                if (!GetSkillValue(skill))
                     return EQUIP_ERR_NO_REQUIRED_PROFICIENCY;
             }
 
@@ -9964,14 +9982,7 @@ InventoryResult Player::CanUseItem(ItemPrototype const *pProto, bool not_loading
         if (pProto->RequiredSpell != 0 && !HasSpell(pProto->RequiredSpell))
             return EQUIP_ERR_NO_REQUIRED_PROFICIENCY;
 
-
-        auto playerRank = m_honorMgr.GetHighestRank().rank;
-
-        if (sWorld.getConfig(CONFIG_BOOL_ACCURATE_PVP_EQUIP_REQUIREMENTS)
-            && sWorld.GetWowPatch() < WOW_PATCH_106)
-        {
-            playerRank = m_honorMgr.GetRank().rank;
-        }
+        auto playerRank = (sWorld.getConfig(CONFIG_BOOL_ACCURATE_PVP_EQUIP_REQUIREMENTS) && sWorld.GetWowPatch() < WOW_PATCH_106) ? m_honorMgr.GetRank().rank : m_honorMgr.GetHighestRank().rank;
 
         if (not_loading && playerRank < (uint8)pProto->RequiredHonorRank)
             return EQUIP_ERR_CANT_EQUIP_RANK;
@@ -14698,7 +14709,8 @@ bool Player::LoadFromDB(ObjectGuid guid, SqlQueryHolder *holder)
     // must be before inventory (some items required reputation check)
     m_reputationMgr.LoadFromDB(holder->GetResult(PLAYER_LOGIN_QUERY_LOADREPUTATION));
 
-    _LoadInventory(holder->GetResult(PLAYER_LOGIN_QUERY_LOADINVENTORY), time_diff);
+    bool has_epic_mount = false; // Needed for riding skill replacement in patch 1.12.
+    _LoadInventory(holder->GetResult(PLAYER_LOGIN_QUERY_LOADINVENTORY), time_diff, has_epic_mount);
     _LoadItemLoot(holder->GetResult(PLAYER_LOGIN_QUERY_LOADITEMLOOT));
 
     // update items with duration and realtime
@@ -14853,7 +14865,81 @@ bool Player::LoadFromDB(ObjectGuid guid, SqlQueryHolder *holder)
     LoadCustomFlags();
     sBattleGroundMgr.PlayerLoggedIn(this); // Add to BG queue if needed
     CreatePacketBroadcaster();
+
+    // Note, if not using accurate mounts be sure to update all trainer spells in the
+    // database or players will be stuck with the old skill system
+    if (sWorld.GetWowPatch() >= WOW_PATCH_112 && sWorld.getConfig(CONFIG_BOOL_ACCURATE_MOUNTS))
+        UpdateOldRidingSkillToNew(has_epic_mount);
+
     return true;
+}
+
+// The new riding skills (Apprentice/Journeyman) were added in patch 1.12.
+// Prior to that there was a separate skill of each type of mount.
+// All players who have the old skill need to have it swapped for the new one.
+void Player::UpdateOldRidingSkillToNew(bool has_epic_mount)
+{
+    // Already has the new skill, no need to do anything.
+    if (HasSkill(SKILL_RIDING))
+        return;
+
+    bool has_old_riding_skill = false;
+
+    if (HasSkill(SKILL_RIDING_HORSE))
+    {
+        SetSkill(SKILL_RIDING_HORSE, 0, 0);
+        has_old_riding_skill = true;
+    }
+
+    if (HasSkill(SKILL_RIDING_WOLF))
+    {
+        SetSkill(SKILL_RIDING_WOLF, 0, 0);
+        has_old_riding_skill = true;
+    }
+
+    if (HasSkill(SKILL_RIDING_TIGER))
+    {
+        SetSkill(SKILL_RIDING_TIGER, 0, 0);
+        has_old_riding_skill = true;
+    }
+
+    if (HasSkill(SKILL_RIDING_RAM))
+    {
+        SetSkill(SKILL_RIDING_RAM, 0, 0);
+        has_old_riding_skill = true;
+    }
+
+    if (HasSkill(SKILL_RIDING_RAPTOR))
+    {
+        SetSkill(SKILL_RIDING_RAPTOR, 0, 0);
+        has_old_riding_skill = true;
+    }
+
+    if (HasSkill(SKILL_RIDING_MECHANOSTRIDER))
+    {
+        SetSkill(SKILL_RIDING_MECHANOSTRIDER, 0, 0);
+        has_old_riding_skill = true;
+    }
+
+    if (HasSkill(SKILL_RIDING_UNDEAD_HORSE))
+    {
+        SetSkill(SKILL_RIDING_UNDEAD_HORSE, 0, 0);
+        has_old_riding_skill = true;
+    }
+
+    if (HasSkill(SKILL_RIDING_KODO))
+    {
+        SetSkill(SKILL_RIDING_KODO, 0, 0);
+        has_old_riding_skill = true;
+    }
+
+    if (!has_old_riding_skill)
+        return;
+    
+    if (has_epic_mount)
+        learnSpell(33391, false); // Journeyman Riding
+    else
+        learnSpell(33388, false); // Apprentice Riding
 }
 
 void Player::SendPacketsAtRelogin()
@@ -15044,7 +15130,7 @@ void Player::LoadCorpse()
     }
 }
 
-void Player::_LoadInventory(QueryResult *result, uint32 timediff)
+void Player::_LoadInventory(QueryResult *result, uint32 timediff, bool &has_epic_mount)
 {
     //               0                1      2         3        4      5             6                 7           8     9    10    11   12    13              14
     //SELECT creatorGuid, giftCreatorGuid, count, duration, charges, flags, enchantments, randomPropertyId, durability, text, bag, slot, item, itemEntry, generated_loot
@@ -15081,6 +15167,10 @@ void Player::_LoadInventory(QueryResult *result, uint32 timediff)
                 sLog.outError("Player::_LoadInventory: Player %s has an unknown item (id: #%u) in inventory, deleted.", GetName(), item_id);
                 continue;
             }
+
+            // Needed for riding skill replacement in patch 1.12.
+            if ((proto->RequiredSkill == SKILL_RIDING) && (proto->RequiredSkillRank == 150))
+                has_epic_mount = true;
 
             // Duplicate check. Player listed item in AH and then immediately relogged, before the item
             // was deleted from the inventory in the DB
@@ -18475,8 +18565,9 @@ BattleGroundBracketId Player::GetBattleGroundBracketIdFromLevel(BattleGroundType
 {
     BattleGround *bg = sBattleGroundMgr.GetBattleGroundTemplate(bgTypeId);
     ASSERT(bg);
+
     if (getLevel() < bg->GetMinLevel())
-        return BG_BRACKET_ID_FIRST;
+        return BG_BRACKET_ID_NONE;
 
     uint32 bracket_id = (getLevel() - bg->GetMinLevel()) / 10;
     if (bracket_id > MAX_BATTLEGROUND_BRACKETS)
@@ -19923,7 +20014,7 @@ bool Player::TeleportToHomebind(uint32 options, bool hearthCooldown)
         SpellEntry const *spellInfo = sSpellMgr.GetSpellEntry(8690);
         AddSpellAndCategoryCooldowns(spellInfo, 6948);
     }
-    return TeleportTo(m_homebindMapId, m_homebindX, m_homebindY, m_homebindZ, GetOrientation(), options); 
+    return TeleportTo(m_homebindMapId, m_homebindX, m_homebindY, m_homebindZ, GetOrientation(), (options | TELE_TO_FORCE_MAP_CHANGE));
 }
 
 Object* Player::GetObjectByTypeMask(ObjectGuid guid, TypeMask typemask)
@@ -20632,7 +20723,7 @@ void Player::LootMoney(int32 money, Loot* loot)
 void Player::RewardHonor(Unit* uVictim, uint32 groupSize)
 {
     // Honor System was added in 1.4.
-    if (sWorld.GetWowPatch() < WOW_PATCH_104)
+    if (sWorld.GetWowPatch() < WOW_PATCH_104 && sWorld.getConfig(CONFIG_BOOL_ACCURATE_PVP_TIMELINE))
         return;
 
     if (!uVictim)
@@ -20651,7 +20742,7 @@ void Player::RewardHonor(Unit* uVictim, uint32 groupSize)
                 return;
 
             // Dishonorable kills were added in 1.5.
-            if (sWorld.GetWowPatch() < WOW_PATCH_105)
+            if (sWorld.GetWowPatch() < WOW_PATCH_105 && sWorld.getConfig(CONFIG_BOOL_ACCURATE_PVP_TIMELINE))
                 return;
 
             m_honorMgr.Add(HonorMgr::DishonorableKillPoints(getLevel()), DISHONORABLE, cVictim);
@@ -20672,7 +20763,7 @@ void Player::RewardHonor(Unit* uVictim, uint32 groupSize)
 void Player::RewardHonorOnDeath()
 {
     // Honor System was added in 1.4.
-    if (sWorld.GetWowPatch() < WOW_PATCH_104)
+    if (sWorld.GetWowPatch() < WOW_PATCH_104 && sWorld.getConfig(CONFIG_BOOL_ACCURATE_PVP_TIMELINE))
         return;
 
     if (GetAura(2479, EFFECT_INDEX_0))             // Honorless Target

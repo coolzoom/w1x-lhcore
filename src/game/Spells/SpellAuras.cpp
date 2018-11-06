@@ -1980,7 +1980,6 @@ void Aura::HandleAuraDummy(bool apply, bool Real)
                     return;
                 }
                 case 10848: // Shroud of Death
-                case 22650: // Ghost Visual
                 case 27978: // Shroud of Death
                     if (apply)
                         target->m_AuraFlags |= UNIT_AURAFLAG_ALIVE_INVISIBLE;
@@ -2201,10 +2200,16 @@ std::pair<unsigned int, float> getShapeshiftModelInfo(ShapeshiftForm form, Unit 
     switch (form)
     {
     case FORM_CAT:
-        if (Player::TeamForRace(target->getRace()) == ALLIANCE)
-            modelid = 892;
+        
+        if (target->IsPlayer())
+        {
+            if (Player::TeamForRace(target->getRace()) == ALLIANCE)
+                modelid = 892;
+            else
+                modelid = 8571;
+        }
         else
-            modelid = 8571;
+            modelid = 892;
         mod = 0.80f;
         break;
     case FORM_TRAVEL:
@@ -2216,20 +2221,20 @@ std::pair<unsigned int, float> getShapeshiftModelInfo(ShapeshiftForm form, Unit 
         mod = 0.80f;
         break;
     case FORM_BEAR:
-        if (Player::TeamForRace(target->getRace()) == ALLIANCE)
-            modelid = 2281;
+    case FORM_DIREBEAR:
+        if (target->IsPlayer())
+        {
+            if (Player::TeamForRace(target->getRace()) == ALLIANCE)
+                modelid = 2281;
+            else
+                modelid = 2289;
+        }
         else
-            modelid = 2289;
+            modelid = 2281;
         break;
     case FORM_GHOUL:
         if (Player::TeamForRace(target->getRace()) == ALLIANCE)
             modelid = 10045;
-        break;
-    case FORM_DIREBEAR:
-        if (Player::TeamForRace(target->getRace()) == ALLIANCE)
-            modelid = 2281;
-        else
-            modelid = 2289;
         break;
     case FORM_CREATUREBEAR:
         modelid = 902;
@@ -2239,10 +2244,15 @@ std::pair<unsigned int, float> getShapeshiftModelInfo(ShapeshiftForm form, Unit 
         mod = 0.80f;
         break;
     case FORM_MOONKIN:
-        if (Player::TeamForRace(target->getRace()) == ALLIANCE)
-            modelid = 15374;
+        if (target->IsPlayer())
+        {
+            if (Player::TeamForRace(target->getRace()) == ALLIANCE)
+                modelid = 15374;
+            else
+                modelid = 15375;
+        }
         else
-            modelid = 15375;
+            modelid = 15374;
         break;
     case FORM_TREE:
         modelid = 864;
@@ -4711,6 +4721,14 @@ void Aura::HandleModAttackSpeed(bool apply, bool /*Real*/)
     target->ApplyAttackTimePercentMod(BASE_ATTACK, float(m_modifier.m_amount), apply);
     target->ApplyAttackTimePercentMod(OFF_ATTACK, float(m_modifier.m_amount), apply);
     target->ApplyAttackTimePercentMod(RANGED_ATTACK, float(m_modifier.m_amount), apply);
+
+    // Seal of the Crusader damage reduction
+    // SoC increases attack speed but reduces damage to maintain the same DPS
+    if (GetSpellProto()->IsFitToFamily<SPELLFAMILY_PALADIN, CF_PALADIN_SEAL_OF_THE_CRUSADER>())
+    {
+        float reduction = (-100.0f * m_modifier.m_amount) / (m_modifier.m_amount + 100.0f);
+        target->HandleStatModifier(UNIT_MOD_DAMAGE_MAINHAND, TOTAL_PCT, reduction, apply);
+    }
 }
 
 void Aura::HandleModMeleeSpeedPct(bool apply, bool /*Real*/)
@@ -5842,8 +5860,14 @@ void Aura::PeriodicDummyTick()
                         target->CastSpell(target, m_modifier.m_amount, true, nullptr, this);
                     return;
                 case 24596:                                 // Intoxicating Venom
-                    if (target->isInCombat() && urand(0, 99) < 7)
-                        target->AddAura(8379); // Disarm
+                    if (target->isInCombat())
+                    {
+                        uint32 rand = urand(0, 99);
+                        if (rand < 7)
+                            target->CastSpell(target, 8379, true, nullptr, this);     // Disarm
+                        else if (rand < 14)
+                            target->CastSpell(target, 6869, true, nullptr, this);     // Fall Down
+                    }
                     return;
             }
             break;

@@ -69,6 +69,7 @@ class ChatHandler;
 struct ScriptInfo;
 class BattleGround;
 class GridMap;
+class WeatherSystem;
 class Transport;
 
 namespace VMAP
@@ -320,7 +321,10 @@ class MANGOS_DLL_SPEC Map : public GridRefManager<NGridType>, public MaNGOS::Obj
         uint32 GetPlayersCountExceptGMs() const;
         bool ActiveObjectsNearGrid(uint32 x,uint32 y) const;
 
+        // Send a Packet to all players on a map
         void SendToPlayers(WorldPacket const* data) const;
+        // Send a Packet to all players in a zone. Return false if no player found
+        bool SendToPlayersInZone(WorldPacket const* data, uint32 zoneId) const;
 
         typedef MapRefManager PlayerList;
         PlayerList const& GetPlayers() const { return m_mapRefManager; }
@@ -496,6 +500,16 @@ class MANGOS_DLL_SPEC Map : public GridRefManager<NGridType>, public MaNGOS::Obj
         void BindToInstanceOrRaid(Player* player, time_t objectResetTime, bool permBindToRaid);
         void TeleportAllPlayersToHomeBind();
 
+        // WeatherSystem
+        WeatherSystem* GetWeatherSystem() const { return m_weatherSystem; }
+        /** Set the weather in a zone on this map
+         * @param zoneId set the weather for which zone
+         * @param type What weather to set
+         * @param grade how strong the weather should be
+         * @param permanently set the weather permanently?
+         */
+        void SetWeather(uint32 zoneId, WeatherType type, float grade, bool permanently);
+
         void SetMapUpdateIndex(int idx) { _updateIdx = idx; }
 
         // Get Holder for Creature Linking
@@ -503,6 +517,8 @@ class MANGOS_DLL_SPEC Map : public GridRefManager<NGridType>, public MaNGOS::Obj
 
         void AddCorpseToRemove(Corpse* corpse, ObjectGuid looter_guid);
         GameObject* SummonGameObject(uint32 entry, float x, float y, float z, float ang, float rotation0, float rotation1, float rotation2, float rotation3, uint32 respawnTime, uint32 worldMask);
+
+        bool ShouldUpdateMap(uint32 now, uint32 inactiveTimeLimit);
 
     private:
         void LoadMapAndVMap(int gx, int gy);
@@ -647,6 +663,9 @@ class MANGOS_DLL_SPEC Map : public GridRefManager<NGridType>, public MaNGOS::Obj
         // Holder for information about linked mobs
         CreatureLinkingHolder m_creatureLinkingHolder;
 
+        // WeatherSystem
+        WeatherSystem* m_weatherSystem;
+
         // Functions to handle all db script commands.
         bool ScriptCommand_Talk(const ScriptInfo& script, WorldObject* source, WorldObject* target);
         bool ScriptCommand_Emote(const ScriptInfo& script, WorldObject* source, WorldObject* target);
@@ -705,6 +724,9 @@ class MANGOS_DLL_SPEC Map : public GridRefManager<NGridType>, public MaNGOS::Obj
         bool ScriptCommand_ServerVariable(const ScriptInfo& script, WorldObject* source, WorldObject* target);
         bool ScriptCommand_CreatureSpells(const ScriptInfo& script, WorldObject* source, WorldObject* target);
         bool ScriptCommand_RemoveGuardians(const ScriptInfo& script, WorldObject* source, WorldObject* target);
+        bool ScriptCommand_AddSpellCooldown(const ScriptInfo& script, WorldObject* source, WorldObject* target);
+        bool ScriptCommand_RemoveSpellCooldown(const ScriptInfo& script, WorldObject* source, WorldObject* target);
+        bool ScriptCommand_SetReactState(const ScriptInfo& script, WorldObject* source, WorldObject* target);
 
         // Add any new script command functions to the array.
         const ScriptCommandFunction m_ScriptCommands[SCRIPT_COMMAND_MAX] =
@@ -766,6 +788,9 @@ class MANGOS_DLL_SPEC Map : public GridRefManager<NGridType>, public MaNGOS::Obj
             &Map::ScriptCommand_ServerVariable,         // 54
             &Map::ScriptCommand_CreatureSpells,         // 55
             &Map::ScriptCommand_RemoveGuardians,        // 56
+            &Map::ScriptCommand_AddSpellCooldown,       // 57
+            &Map::ScriptCommand_RemoveSpellCooldown,    // 58
+            &Map::ScriptCommand_SetReactState,          // 59
         };
 
     public:

@@ -1181,7 +1181,7 @@ class MANGOS_DLL_SPEC Player final: public Unit
         Item* GetItemFromBuyBackSlot( uint32 slot );
         void RemoveItemFromBuyBackSlot( uint32 slot, bool del );
 
-        uint32 GetMaxKeyringSize() const { return KEYRING_SLOT_END-KEYRING_SLOT_START; }
+        uint32 GetMaxKeyringSize() const { return getLevel() < 40 ? 4 : (getLevel() < 50 ? 8 : 12); }
         void SendEquipError( InventoryResult msg, Item* pItem, Item *pItem2 = NULL, uint32 itemid = 0 ) const;
         void SendBuyError( BuyResult msg, Creature* pCreature, uint32 item, uint32 param );
         void SendSellError( SellResult msg, Creature* pCreature, ObjectGuid itemGuid, uint32 param );
@@ -1574,8 +1574,8 @@ class MANGOS_DLL_SPEC Player final: public Unit
 
         uint32 GetSpellByProto(ItemPrototype *proto);
 
-        float GetHealthBonusFromStamina();
-        float GetManaBonusFromIntellect();
+        float GetHealthBonusFromStamina(float stamina);
+        float GetManaBonusFromIntellect(float intellect);
 
         bool UpdateStats(Stats stat);
         bool UpdateAllStats();
@@ -2055,6 +2055,8 @@ class MANGOS_DLL_SPEC Player final: public Unit
         bool CanSwim() const { return true; }
         bool CanFly() const { return IsFlying(); }
 
+        void SetFly(bool enable) override;
+
         uint32 watching_cinematic_entry;
         Position cinematic_start;
         Position const* cinematic_current_waypoint;
@@ -2177,6 +2179,9 @@ class MANGOS_DLL_SPEC Player final: public Unit
 
         inline bool HasScheduledEvent() const { return m_Events.HasScheduledEvent(); }
         void SetAutoInstanceSwitch(bool v) { m_enableInstanceSwitch = v; }
+
+        void SetEscortingGuid(const ObjectGuid& guid) { _escortingGuid = guid; }
+        const ObjectGuid& GetEscortingGuid() const { return _escortingGuid; }
     protected:
         bool   m_enableInstanceSwitch;
         uint32 m_skippedUpdateTime;
@@ -2237,7 +2242,7 @@ class MANGOS_DLL_SPEC Player final: public Unit
         void _LoadActions(QueryResult *result);
         void _LoadAuras(QueryResult *result, uint32 timediff);
         void _LoadBoundInstances(QueryResult *result);
-        void _LoadInventory(QueryResult *result, uint32 timediff);
+        void _LoadInventory(QueryResult *result, uint32 timediff, bool& has_epic_mount);
         void _LoadItemLoot(QueryResult *result);
         void _LoadMails(QueryResult *result);
         void _LoadMailedItems(QueryResult *result);
@@ -2396,6 +2401,7 @@ class MANGOS_DLL_SPEC Player final: public Unit
 
         void UpdateKnownCurrencies(uint32 itemId, bool apply);
         void AdjustQuestReqItemCount( Quest const* pQuest, QuestStatusData& questStatusData );
+        void UpdateOldRidingSkillToNew(bool has_epic_mount);
 
         void SetCanDelayTeleport(bool setting) { m_bCanDelayTeleport = setting; }
         bool IsHasDelayedTeleport() const
@@ -2469,6 +2475,8 @@ class MANGOS_DLL_SPEC Player final: public Unit
         int32 m_cannotBeDetectedTimer;
 
         uint32 m_bNextRelocationsIgnored;
+
+        ObjectGuid _escortingGuid;
 
 public:
         /**

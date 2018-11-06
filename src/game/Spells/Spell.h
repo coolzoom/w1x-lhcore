@@ -326,8 +326,8 @@ class Spell
         Spell(Unit* caster, SpellEntry const *info, bool triggered, ObjectGuid originalCasterGUID = ObjectGuid(), SpellEntry const* triggeredBy = NULL, Unit* victim = NULL, SpellEntry const* triggeredByParent = NULL);
         ~Spell();
 
-        void prepare(SpellCastTargets targets, Aura* triggeredByAura = nullptr);
-        void prepare(Aura* triggeredByAura = nullptr);
+        SpellCastResult prepare(SpellCastTargets targets, Aura* triggeredByAura = nullptr, uint32 chance = 0);
+        SpellCastResult prepare(Aura* triggeredByAura = nullptr, uint32 chance = 0);
 
         void cancel();
 
@@ -490,6 +490,8 @@ class Spell
         // For summoning ritual helpers visual spell
         void SetChannelingVisual(bool value) { m_isChannelingVisual = value; }
         bool IsChannelingVisual() const { return m_isChannelingVisual; }
+
+        int32 GetAbsorbedDamage() const { return m_absorbed; }
     protected:
         bool HasGlobalCooldown() const;
         void TriggerGlobalCooldown();
@@ -562,6 +564,7 @@ class Spell
         int32 m_damage;                                     // Damage   in effects count here
         int32 m_healing;                                    // Healing in effects count here
         int32 m_healthLeech;                                // Health leech in effects for all targets count here
+        int32 m_absorbed;
 
         //******************************************
         // Spell trigger system

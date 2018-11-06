@@ -83,9 +83,15 @@ uint8 const ConditionTargetsInternal[] =
     CONDITION_REQ_MAP_OR_WORLDOBJECT, //  34
     CONDITION_REQ_MAP_OR_WORLDOBJECT, //  35
     CONDITION_REQ_MAP_OR_WORLDOBJECT, //  36
-    CONDITION_REQ_SOURCE_AND_TARGET,  //  37
-    CONDITION_REQ_SOURCE_AND_TARGET,  //  38
+    CONDITION_REQ_BOTH_WORLDOBJECTS,  //  37
+    CONDITION_REQ_BOTH_WORLDOBJECTS,  //  38
     CONDITION_REQ_TARGET_WORLDOBJECT, //  39
+    CONDITION_REQ_TARGET_UNIT,        //  40
+    CONDITION_REQ_TARGET_UNIT,        //  41
+    CONDITION_REQ_TARGET_UNIT,        //  42
+    CONDITION_REQ_TARGET_UNIT,        //  43
+    CONDITION_REQ_BOTH_UNITS,         //  44
+    CONDITION_REQ_TARGET_PLAYER,      //  45
 };
 
 // Starts from 4th element so that -3 will return first element.
@@ -316,7 +322,7 @@ bool inline ConditionEntry::Evaluate(WorldObject const* target, Map const* map, 
                         return true;
                     if (Group* grp = ((Player*)pPlayer)->GetGroup())
                     {
-                        for (GroupReference* itr = grp->GetFirstMember(); itr != NULL; itr = itr->next())
+                        for (GroupReference* itr = grp->GetFirstMember(); itr != nullptr; itr = itr->next())
                         {
                             Player* pl = itr->getSource();
                             if (pl && pl->isAlive() && !pl->isGameMaster() && (!m_value2 || !source || source->IsWithinDistInMap(pl, m_value2)))
@@ -503,6 +509,52 @@ bool inline ConditionEntry::Evaluate(WorldObject const* target, Map const* map, 
         {
             return target->IsMoving();
         }
+        case CONDITION_HAS_PET:
+        {
+            return target->ToUnit()->GetPet();
+        }
+        case CONDITION_HEALTH_PERCENT:
+        {
+            uint32 hp_percent = target->ToUnit()->GetHealthPercent();
+            
+            switch (m_value2)
+            {
+                case 0:
+                    return hp_percent == m_value1;
+                case 1:
+                    return hp_percent >= m_value1;
+                case 2:
+                    return hp_percent <= m_value1;
+            }
+            return false;
+        }
+        case CONDITION_MANA_PERCENT:
+        {
+            uint32 mana_percent = target->ToUnit()->GetPowerPercent(POWER_MANA);
+
+            switch (m_value2)
+            {
+                case 0:
+                    return mana_percent == m_value1;
+                case 1:
+                    return mana_percent >= m_value1;
+                case 2:
+                    return mana_percent <= m_value1;
+            }
+            return false;
+        }
+        case CONDITION_IS_IN_COMBAT:
+        {
+            return target->ToUnit()->isInCombat();
+        }
+        case CONDITION_IS_HOSTILE_TO:
+        {
+            return target->ToUnit()->IsHostileTo(source->ToUnit());
+        }
+        case CONDITION_IS_IN_GROUP:
+        {
+            return target->ToPlayer()->GetGroup();
+        }
     }
     return false;
 }
@@ -562,8 +614,20 @@ bool ConditionEntry::CheckParamRequirements(WorldObject const* target, Map const
             if (map || source || target)
                 return true;
             return false;
-        case CONDITION_REQ_SOURCE_AND_TARGET:
+        case CONDITION_REQ_BOTH_WORLDOBJECTS:
             if (source && target)
+                return true;
+            return false;
+        case CONDITION_REQ_BOTH_GAMEOBJECTS:
+            if (source && source->IsGameObject() && target && target->IsGameObject())
+                return true;
+            return false;
+        case CONDITION_REQ_BOTH_UNITS:
+            if (source && source->IsUnit() && target && target->IsUnit())
+                return true;
+            return false;
+        case CONDITION_REQ_BOTH_PLAYERS:
+            if (source && source->IsPlayer() && target && target->IsPlayer())
                 return true;
             return false;
     }
@@ -1008,6 +1072,21 @@ bool ConditionEntry::IsValid()
             }
             break;
         }
+        case CONDITION_HEALTH_PERCENT:
+        case CONDITION_MANA_PERCENT:
+        {
+            if ((m_value1 < 1) || (m_value1 > 100))
+            {
+                sLog.outErrorDb("Health or Mana percent condition (entry %u, type %u) has invalid argument %u (must be 1..100), skipped", m_entry, m_condition, m_value1);
+                return false;
+            }
+            if (m_value2 > 2)
+            {
+                sLog.outErrorDb("Health or Mana percent condition (entry %u, type %u) has invalid argument %u (must be 0..2), skipped", m_entry, m_condition, m_value2);
+                return false;
+            }
+            break;
+        }
         case CONDITION_NONE:
         case CONDITION_INSTANCE_SCRIPT:
         case CONDITION_ACTIVE_HOLIDAY:
@@ -1017,6 +1096,10 @@ bool ConditionEntry::IsValid()
         case CONDITION_INSTANCE_DATA_LESS:
         case CONDITION_LINE_OF_SIGHT:
         case CONDITION_IS_MOVING:
+        case CONDITION_HAS_PET:
+        case CONDITION_IS_IN_COMBAT:
+        case CONDITION_IS_HOSTILE_TO:
+        case CONDITION_IS_IN_GROUP:
             break;
         default:
             sLog.outErrorDb("Condition entry %u has bad type of %d, skipped ", m_entry, m_condition);
@@ -1026,7 +1109,7 @@ bool ConditionEntry::IsValid()
 }
 
 // Check if a condition can be used without providing a player param
-bool ConditionEntry::CanBeUsedWithoutPlayer(uint16 entry)
+bool ConditionEntry::CanBeUsedWithoutPlayer(uint32 entry)
 {
     ConditionEntry const* condition = sConditionStorage.LookupEntry<ConditionEntry>(entry);
     if (!condition)

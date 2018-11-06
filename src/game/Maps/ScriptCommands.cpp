@@ -578,8 +578,8 @@ bool Map::ScriptCommand_CastSpell(const ScriptInfo& script, WorldObject* source,
 
     Creature* pCreatureSource = pUnitSource->ToCreature();
 
-    if (pCreatureSource && pCreatureSource->AI())
-        pCreatureSource->AI()->DoCastSpellIfCan(pUnitTarget, script.castSpell.spellId, script.castSpell.flags);
+    if (pCreatureSource)
+        pCreatureSource->TryToCast(pUnitTarget, script.castSpell.spellId, script.castSpell.flags, 0u);
     else
         pUnitSource->CastSpell(pUnitTarget, script.castSpell.spellId, (script.castSpell.flags & CF_TRIGGERED) != 0);
 
@@ -703,7 +703,7 @@ bool Map::ScriptCommand_SetMovementType(const ScriptInfo& script, WorldObject* s
             pSource->GetMotionMaster()->MoveIdle();
             break;
         case RANDOM_MOTION_TYPE:
-            pSource->GetMotionMaster()->MoveRandom();
+            pSource->GetMotionMaster()->MoveRandom(script.movement.boolParam, script.x);
             break;
         case WAYPOINT_MOTION_TYPE:
             pSource->GetMotionMaster()->MoveWaypoint(script.movement.boolParam);
@@ -1534,8 +1534,66 @@ bool Map::ScriptCommand_RemoveGuardians(const ScriptInfo& script, WorldObject* s
         sLog.outError("SCRIPT_COMMAND_REMOVE_GUARDIANS (script id %u) call for a NULL or non-unit source (TypeId: %u), skipping.", script.id, source ? source->GetTypeId() : 0);
         return ShouldAbortScript(script);
     }
+    
+    if (script.removeGuardian.creatureId)
+    {
+        pSource->RemoveGuardiansWithEntry(script.removeGuardian.creatureId);
+    }
+    else
+        pSource->RemoveGuardians();
 
-    pSource->RemoveGuardians();
+    return false;
+}
+
+// SCRIPT_COMMAND_ADD_SPELL_COOLDOWN (57)
+bool Map::ScriptCommand_AddSpellCooldown(const ScriptInfo& script, WorldObject* source, WorldObject* target)
+{
+    Unit* pSource = ToUnit(source);
+
+    if (!pSource)
+    {
+        sLog.outError("SCRIPT_COMMAND_ADD_SPELL_COOLDOWN (script id %u) call for a NULL or non-unit source (TypeId: %u), skipping.", script.id, source ? source->GetTypeId() : 0);
+        return ShouldAbortScript(script);
+    }
+
+    pSource->AddSpellCooldown(script.addCooldown.spellId, 0, time(nullptr) + script.addCooldown.cooldown);
+    if (Player* pPlayer = pSource->ToPlayer())
+        pPlayer->SendSpellCooldown(script.addCooldown.spellId, script.addCooldown.cooldown * IN_MILLISECONDS, pPlayer->GetObjectGuid());
+
+    return false;
+}
+
+// SCRIPT_COMMAND_REMOVE_SPELL_COOLDOWN (58)
+bool Map::ScriptCommand_RemoveSpellCooldown(const ScriptInfo& script, WorldObject* source, WorldObject* target)
+{
+    Unit* pSource = ToUnit(source);
+
+    if (!pSource)
+    {
+        sLog.outError("SCRIPT_COMMAND_REMOVE_SPELL_COOLDOWN (script id %u) call for a NULL or non-unit source (TypeId: %u), skipping.", script.id, source ? source->GetTypeId() : 0);
+        return ShouldAbortScript(script);
+    }
+
+    if (script.removeCooldown.spellId)
+        pSource->RemoveSpellCooldown(script.removeCooldown.spellId, true);
+    else
+        pSource->RemoveAllSpellCooldown();
+
+    return false;
+}
+
+// SCRIPT_COMMAND_SET_REACT_STATE (59)
+bool Map::ScriptCommand_SetReactState(const ScriptInfo& script, WorldObject* source, WorldObject* target)
+{
+    Creature* pSource = ToCreature(source);
+
+    if (!pSource)
+    {
+        sLog.outError("SCRIPT_COMMAND_SET_REACT_STATE (script id %u) call for a NULL or non-creature source (TypeId: %u), skipping.", script.id, source ? source->GetTypeId() : 0);
+        return ShouldAbortScript(script);
+    }
+
+    pSource->SetReactState(ReactStates(script.setReactState.state));
 
     return false;
 }

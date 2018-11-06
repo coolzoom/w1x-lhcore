@@ -156,7 +156,7 @@ enum BattleGroundQueueTypeId
 
 enum BattleGroundBracketId                                  // bracketId for level ranges
 {
-    BG_BRACKET_ID_TEMPLATE       = -1,
+    BG_BRACKET_ID_NONE           = -1,
     BG_BRACKET_ID_FIRST          = 0,                       // brackets start from specific BG min level and each include 10 levels range
     BG_BRACKET_ID_LAST           = 5,                       // so for start level 10 will be 10-19, 20-29, ...  all greater max bg level included in last bracket
 
@@ -318,6 +318,7 @@ class BattleGround
         uint8 GetWinner() const             { return m_Winner; }
         uint32 GetBattlemasterEntry() const;
         uint32 GetBonusHonorFromKill(uint32 kills) const;
+        float GetHonorModifier();
 
         // Set methods:
         void SetName(char const* Name)               { m_Name = Name; }

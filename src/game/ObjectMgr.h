@@ -139,18 +139,25 @@ struct SoundEntriesEntry
     std::string     Name;
 };
 
+// Number of spells in one template
+#define CREATURE_SPELLS_MAX_SPELLS 8
+// Columns in the db for each spell
+#define CREATURE_SPELLS_MAX_COLUMNS 11
+
 struct CreatureSpellsEntry
 {
     const uint16 spellId;
     const uint8  probability;
     const uint8  castTarget;
+    const uint32 targetParam1;
+    const uint32 targetParam2;
     const uint8  castFlags;
     const uint32 delayInitialMin;
     const uint32 delayInitialMax;
     const uint32 delayRepeatMin;
     const uint32 delayRepeatMax;
     const uint32 scriptId;
-    CreatureSpellsEntry(uint16 Id, uint8 Probability, uint8 CastTarget, uint8 CastFlags, uint32 InitialMin, uint32 InitialMax, uint32 RepeatMin, uint32 RepeatMax, uint32 ScriptId) : spellId(Id), probability(Probability), castTarget(CastTarget), castFlags(CastFlags), delayInitialMin(InitialMin), delayInitialMax(InitialMax), delayRepeatMin(RepeatMin), delayRepeatMax(RepeatMax), scriptId(ScriptId) {}
+    CreatureSpellsEntry(uint16 Id, uint8 Probability, uint8 CastTarget, uint32 TargetParam1, uint32 TargetParam2, uint8 CastFlags, uint32 InitialMin, uint32 InitialMax, uint32 RepeatMin, uint32 RepeatMax, uint32 ScriptId) : spellId(Id), probability(Probability), castTarget(CastTarget), targetParam1(TargetParam1), targetParam2(TargetParam2), castFlags(CastFlags), delayInitialMin(InitialMin), delayInitialMax(InitialMax), delayRepeatMin(RepeatMin), delayRepeatMax(RepeatMax), scriptId(ScriptId) {}
 };
 
 typedef std::vector<CreatureSpellsEntry> CreatureSpellsTemplate;
@@ -344,19 +351,6 @@ typedef std::pair<GossipMenuItemsMap::const_iterator, GossipMenuItemsMap::const_
 struct PetCreateSpellEntry
 {
     uint32 spellid[4];
-};
-
-#define WEATHER_SEASONS 4
-struct WeatherSeasonChances
-{
-    uint32 rainChance;
-    uint32 snowChance;
-    uint32 stormChance;
-};
-
-struct WeatherZoneChances
-{
-    WeatherSeasonChances data[WEATHER_SEASONS];
 };
 
 struct GraveYardData
@@ -577,8 +571,6 @@ class ObjectMgr
         typedef UNORDERED_MAP<uint32, RepSpilloverTemplate> RepSpilloverTemplateMap;
 
         typedef UNORDERED_MAP<uint32, PointOfInterest> PointOfInterestMap;
-
-        typedef UNORDERED_MAP<uint32, WeatherZoneChances> WeatherZoneMap;
 
         typedef UNORDERED_MAP<uint32, PetCreateSpellEntry> PetCreateSpellMap;
 
@@ -814,7 +806,6 @@ class ObjectMgr
 
         void LoadPointsOfInterest();
 
-        void LoadWeatherZoneChances();
         void LoadGameTele();
 
         void LoadNpcGossips();
@@ -875,14 +866,6 @@ class ObjectMgr
             if ( itr != mItemTexts.end() )
                 return itr->second;
             return "There is no info for this item";
-        }
-
-        WeatherZoneChances const* GetWeatherChances(uint32 zone_id) const
-        {
-            auto itr = mWeatherZoneMap.find(zone_id);
-            if(itr != mWeatherZoneMap.end())
-                return &itr->second;
-            return nullptr;
         }
 
         CreatureDataPair const* GetCreatureDataPair(uint32 guid) const
@@ -1076,8 +1059,7 @@ class ObjectMgr
         int GetIndexForLocale(LocaleConstant loc);
         LocaleConstant GetLocaleForIndex(int i);
 
-        uint16 GetConditionId(ConditionType condition, uint32 value1, uint32 value2);
-        bool IsConditionSatisfied(uint16 conditionId, WorldObject const* target, Map const* map, WorldObject const* source, ConditionSource conditionSourceType) const;
+        bool IsConditionSatisfied(uint32 conditionId, WorldObject const* target, Map const* map, WorldObject const* source, ConditionSource conditionSourceType) const;
 
         GameTele const* GetGameTele(uint32 id) const
         {
@@ -1136,7 +1118,7 @@ class ObjectMgr
             return &iter->second;
         }
 
-        void AddVendorItem(uint32 entry,uint32 item, uint32 maxcount, uint32 incrtime);
+        void AddVendorItem(uint32 entry,uint32 item, uint32 maxcount, uint32 incrtime, uint32 itemflags);
         bool RemoveVendorItem(uint32 entry,uint32 item);
         bool IsVendorItemValid(bool isTemplate, char const* tableName, uint32 vendor_entry, uint32 item, uint32 maxcount, uint32 ptime, Player* pl = nullptr, std::set<uint32>* skip_vendors = nullptr) const;
 
@@ -1323,8 +1305,6 @@ class ObjectMgr
         GossipMenusMap      m_mGossipMenusMap;
         GossipMenuItemsMap  m_mGossipMenuItemsMap;
         PointOfInterestMap  mPointsOfInterest;
-
-        WeatherZoneMap      mWeatherZoneMap;
 
         PetCreateSpellMap   mPetCreateSpell;
 

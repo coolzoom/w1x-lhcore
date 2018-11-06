@@ -315,12 +315,13 @@ enum SelectFlags
 // Vendors
 struct VendorItem
 {
-    VendorItem(uint32 _item, uint32 _maxcount, uint32 _incrtime)
-        : item(_item), maxcount(_maxcount), incrtime(_incrtime) {}
+    VendorItem(uint32 _item, uint32 _maxcount, uint32 _incrtime, uint32 _itemflags)
+        : item(_item), maxcount(_maxcount), incrtime(_incrtime), itemflags(_itemflags) {}
 
     uint32 item;
     uint32 maxcount;                                        // 0 for infinity item amount
     uint32 incrtime;                                        // time for restore items amount if maxcount != 0
+    uint32 itemflags;
 };
 typedef std::vector<VendorItem*> VendorItemList;
 
@@ -335,9 +336,9 @@ struct VendorItemData
     }
     bool Empty() const { return m_items.empty(); }
     uint8 GetItemCount() const { return m_items.size(); }
-    void AddItem( uint32 item, uint32 maxcount, uint32 ptime)
+    void AddItem( uint32 item, uint32 maxcount, uint32 ptime, uint32 itemflags)
     {
-        m_items.push_back(new VendorItem(item, maxcount, ptime));
+        m_items.push_back(new VendorItem(item, maxcount, ptime, itemflags));
     }
     bool RemoveItem( uint32 item_id );
     VendorItem const* FindItem(uint32 item_id) const;
@@ -353,12 +354,19 @@ struct VendorItemData
 
 struct VendorItemCount
 {
-    explicit VendorItemCount(uint32 _item, uint32 _count)
-        : itemId(_item), count(_count), lastIncrementTime(time(nullptr)) {}
+    explicit VendorItemCount(uint32 _item, uint32 _count, uint32 _restockDelay)
+        : itemId(_item), count(_count), restockDelay(_restockDelay), lastIncrementTime(time(nullptr)) {}
 
     uint32 itemId;
     uint32 count;
+    uint32 restockDelay;
     time_t lastIncrementTime;
+};
+
+enum VendorItemFlags
+{
+    VENDOR_ITEM_FLAG_RANDOM_RESTOCK   = 0x01,
+    VENDOR_ITEM_FLAG_DYNAMIC_RESTOCK  = 0x02,
 };
 
 typedef std::list<VendorItemCount> VendorItemCounts;
@@ -734,7 +742,14 @@ class MANGOS_DLL_SPEC Creature : public Unit
         // AI helpers
         Unit* SelectNearestHostileUnitInAggroRange(bool useLOS) const;
         Unit* SelectNearestTargetInAttackDistance(float dist) const;
-        Unit* DoSelectLowestHpFriendly(float fRange, uint32 uiMinHPDiff = 1, bool bPercent = false) const;
+        Unit* DoSelectLowestHpFriendly(float fRange, uint32 uiMinHPDiff = 1, bool bPercent = false, Unit* except = nullptr) const;
+        Unit* DoFindFriendlyMissingBuff(float range, uint32 spellid, Unit* except = nullptr) const;
+        Unit* DoFindFriendlyCC(float range) const;
+
+        // Used by Creature Spells system to always know result of cast
+        SpellCastResult TryToCast(Unit* pTarget, uint32 uiSpell, uint32 uiCastFlags, uint8 uiChance);
+        SpellCastResult TryToCast(Unit* pTarget, const SpellEntry* pSpellInfo, uint32 uiCastFlags, uint8 uiChance);
+
         // - Victim selection (from aggro list)
         Unit* GetNearestVictimInRange(float min, float max);
         Unit* GetFarthestVictimInRange(float min, float max);
@@ -845,6 +860,9 @@ class MANGOS_DLL_SPEC Creature : public Unit
         // (msecs)timer used for group loot
         uint32 GetGroupLootTimer() { return m_groupLootTimer; }
 
+        void SetEscortable(bool escortable) { _isEscortable = escortable; }
+        bool IsEscortable() const { return _isEscortable; }
+
     protected:
         bool MeetsSelectAttackingRequirement(Unit* pTarget, SpellEntry const* pSpellInfo, uint32 selectFlags) const;
 
@@ -918,6 +936,8 @@ class MANGOS_DLL_SPEC Creature : public Unit
         uint32 _nonPlayerDamageTaken;
         
         float m_callForHelpDist;
+
+        bool _isEscortable;
 
     private:
         GridReference<Creature> m_gridRef;

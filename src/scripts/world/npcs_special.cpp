@@ -1011,90 +1011,6 @@ bool GossipSelect_npc_lunaclaw_spirit(Player* pPlayer, Creature* pCreature, uint
 }
 
 /*######
-## npc_mount_vendor
-######*/
-
-
-#define GOSSIP_ACTION_YESMOUNT (GOSSIP_ACTION_INFO_DEF + 1)
-
-bool GossipHello_npc_mount_vendor(Player* pPlayer, Creature* pCreature)
-{
-    bool canBuy;
-    canBuy = false;
-    uint32 vendor = pCreature->GetEntry();
-    uint8 race = pPlayer->getRace();
-
-    if (pCreature->isQuestGiver())
-        pPlayer->PrepareQuestMenu(pCreature->GetGUID());
-
-    switch (vendor)
-    {
-        case 384:                                           //Katie Hunter
-        case 1460:                                          //Unger Statforth
-        case 2357:                                          //Merideth Carlson
-        case 4885:                                          //Gregor MacVince
-            if (pPlayer->GetReputationRank(72) != REP_EXALTED && race != RACE_HUMAN)
-                pPlayer->SEND_GOSSIP_MENU(5855, pCreature->GetGUID());
-            else canBuy = true;
-            break;
-        case 1261:                                          //Veron Amberstill
-            if (pPlayer->GetReputationRank(47) != REP_EXALTED && race != RACE_DWARF)
-                pPlayer->SEND_GOSSIP_MENU(5856, pCreature->GetGUID());
-            else canBuy = true;
-            break;
-        case 3362:                                          //Ogunaro Wolfrunner
-            if (pPlayer->GetReputationRank(76) != REP_EXALTED && race != RACE_ORC)
-                pPlayer->SEND_GOSSIP_MENU(5841, pCreature->GetGUID());
-            else canBuy = true;
-            break;
-        case 3685:                                          //Harb Clawhoof
-            if (pPlayer->GetReputationRank(81) != REP_EXALTED && race != RACE_TAUREN)
-                pPlayer->SEND_GOSSIP_MENU(5843, pCreature->GetGUID());
-            else canBuy = true;
-            break;
-        case 4730:                                          //Lelanai
-            if (pPlayer->GetReputationRank(69) != REP_EXALTED && race != RACE_NIGHTELF)
-                pPlayer->SEND_GOSSIP_MENU(5844, pCreature->GetGUID());
-            else canBuy = true;
-            break;
-        case 4731:                                          //Zachariah Post
-            if (pPlayer->GetReputationRank(68) != REP_EXALTED && race != RACE_UNDEAD)
-                pPlayer->SEND_GOSSIP_MENU(5840, pCreature->GetGUID());
-            else canBuy = true;
-            break;
-        case 7952:                                          //Zjolnir
-            if (pPlayer->GetReputationRank(530) != REP_EXALTED && race != RACE_TROLL)
-                pPlayer->SEND_GOSSIP_MENU(5842, pCreature->GetGUID());
-            else canBuy = true;
-            break;
-        case 7955:                                          //Milli Featherwhistle
-            if (pPlayer->GetReputationRank(54) != REP_EXALTED && race != RACE_GNOME)
-                pPlayer->SEND_GOSSIP_MENU(5857, pCreature->GetGUID());
-            else canBuy = true;
-            break;
-    }
-
-    if (canBuy)
-    {
-        if (pCreature->isVendor())
-            pPlayer->ADD_GOSSIP_ITEM(GOSSIP_ICON_VENDOR, GOSSIP_TEXT_BROWSE_GOODS, GOSSIP_SENDER_MAIN, GOSSIP_ACTION_TRADE);
-        pPlayer->SEND_GOSSIP_MENU(pPlayer->GetGossipTextId(pCreature), pCreature->GetGUID());
-    }
-    return true;
-}
-
-bool GossipSelect_npc_mount_vendor(Player* pPlayer, Creature* pCreature, uint32 uiSender, uint32 uiAction)
-{
-    switch (uiAction)
-    {
-        case GOSSIP_ACTION_TRADE:
-            pPlayer->SEND_VENDORLIST(pCreature->GetGUID());
-            break;
-    }
-    return true;
-}
-
-/*######
 ## npc_sayge
 ######*/
 
@@ -1572,72 +1488,6 @@ struct npc_emerald_dragon_whelpAI : ScriptedPetAI
 CreatureAI* GetAI_npc_emerald_dragon_whelp(Creature* pCreature)
 {
     return new npc_emerald_dragon_whelpAI(pCreature);
-}
-
-/*######
-## Timbermaw Ancestor
-######*/
-enum
-{
-    SPELL_HEALING_TOUCH = 26097,
-    SPELL_LIGHTNING_BOLT = 9532
-};
-
-struct npc_timbermaw_ancestorAI : ScriptedPetAI
-{
-    explicit npc_timbermaw_ancestorAI(Creature* pCreature) : ScriptedPetAI(pCreature)
-    {
-        m_creature->SetCanModifyStats(true);
-
-        if (m_creature->GetCharmInfo())
-            m_creature->GetCharmInfo()->SetReactState(REACT_DEFENSIVE);
-
-        m_healingTouchTimer = 0;
-
-        npc_timbermaw_ancestorAI::Reset();
-    }
-
-    uint32 m_healingTouchTimer;
-
-    void Reset() override {}
-
-    void UpdatePetAI(const uint32 uiDiff) override
-    {
-        if (m_healingTouchTimer < uiDiff)
-        {
-            if (m_creature->GetOwner()->HealthBelowPct(50))
-            {
-                if (DoCastSpellIfCan(m_creature->GetOwner(), SPELL_HEALING_TOUCH, false) == CAST_OK)
-                    m_healingTouchTimer = 7000;
-            }
-            else if (Unit* pTarget = m_creature->SelectRandomFriendlyTarget(m_creature->GetOwner(), 30.0f))
-            {
-                if (pTarget->HealthBelowPct(50))
-                {
-                    if (DoCastSpellIfCan(pTarget, SPELL_HEALING_TOUCH, false) == CAST_OK)
-                        m_healingTouchTimer = 7000;
-                }
-            }
-        }
-        else
-            m_healingTouchTimer -= uiDiff;
-
-        if (!m_creature->IsNonMeleeSpellCasted(false))
-        {
-            if (Unit * pTarget = m_creature->getVictim())
-            {
-                if (!pTarget->HasBreakableByDamageCrowdControlAura() && !pTarget->IsImmuneToSchoolMask(SPELL_SCHOOL_MASK_NATURE))
-                    DoCastSpellIfCan(pTarget, SPELL_LIGHTNING_BOLT, false);
-            }
-        }
-
-        ScriptedPetAI::UpdatePetAI(uiDiff);
-    }
-};
-
-CreatureAI* GetAI_npc_timbermaw_ancestor(Creature* pCreature)
-{
-    return new npc_timbermaw_ancestorAI(pCreature);
 }
 
 /*######
@@ -3731,12 +3581,6 @@ void AddSC_npcs_special()
     newscript->RegisterSelf();
 
     newscript = new Script;
-    newscript->Name = "npc_mount_vendor";
-    newscript->pGossipHello =  &GossipHello_npc_mount_vendor;
-    newscript->pGossipSelect = &GossipSelect_npc_mount_vendor;
-    newscript->RegisterSelf();
-
-    newscript = new Script;
     newscript->Name = "npc_sayge";
     newscript->pGossipHello = &GossipHello_npc_sayge;
     newscript->pGossipSelect = &GossipSelect_npc_sayge;
@@ -3765,11 +3609,6 @@ void AddSC_npcs_special()
     newscript = new Script;
     newscript->Name = "npc_emerald_dragon_whelp";
     newscript->GetAI = &GetAI_npc_emerald_dragon_whelp;
-    newscript->RegisterSelf();
-
-    newscript = new Script;
-    newscript->Name = "npc_timbermaw_ancestor";
-    newscript->GetAI = &GetAI_npc_timbermaw_ancestor;
     newscript->RegisterSelf();
 
     newscript = new Script;

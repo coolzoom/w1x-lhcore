@@ -821,7 +821,10 @@ enum Mechanics
     MECHANIC_DAZE             = 27,
     MECHANIC_DISCOVERY        = 28,
     MECHANIC_IMMUNE_SHIELD    = 29,                         // Divine (Blessing) Shield/Protection and Ice Block
-    MECHANIC_SAPPED           = 30
+    MECHANIC_SAPPED           = 30,
+
+    // Custom
+    MECHANIC_SLOW_CAST_SPEED  = 31                          // Curse of Tongues
 };
 
 #define FIRST_MECHANIC          1
@@ -2012,9 +2015,7 @@ enum WeatherType
     WEATHER_TYPE_FINE       = 0,
     WEATHER_TYPE_RAIN       = 1,
     WEATHER_TYPE_SNOW       = 2,
-    WEATHER_TYPE_STORM      = 3,
-    WEATHER_TYPE_THUNDERS   = 86,
-    WEATHER_TYPE_BLACKRAIN  = 90
+    WEATHER_TYPE_STORM      = 3
 };
 
 #define MAX_WEATHER_TYPE 4
@@ -2081,7 +2082,7 @@ enum ChatLinkColors
 {
     CHAT_LINK_COLOR_TALENT      = 0xff4e96f7,   // blue
     CHAT_LINK_COLOR_SPELL       = 0xff71d5ff,   // bright blue
-    CHAT_LINK_COLOR_ENCHANT     = 0xffffd000,   // orange
+    CHAT_LINK_COLOR_ENCHANT     = 0xffffffff,   // white
 };
 
 // Values from ItemPetFood (power of (value-1) used for compare with CreatureFamilyEntry.petDietMask
